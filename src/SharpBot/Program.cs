@@ -38,6 +38,9 @@ try
     // Route llama.cpp's native stderr spam through Serilog so it obeys our log level config.
     // Info/Debug are dropped unless SharpBot:Llm:VerboseNativeLogs=true — keeps startup readable.
     var verboseNativeLogs = configuration.GetValue<bool>("SharpBot:Llm:VerboseNativeLogs");
+    // Specific Warnings that fire on every inference but are purely informational — we know we're
+    // running with a smaller context than the model was trained at, that's intentional.
+    var benignWarningSubstrings = new[] { "n_ctx_seq", "n_ctx_per_seq" };
     NativeLibraryConfig.All.WithLogCallback((level, message) =>
     {
         var text = message?.TrimEnd('\n', '\r', ' ');
@@ -45,7 +48,10 @@ try
         switch (level)
         {
             case LLamaLogLevel.Error: Log.Error("[llama] {Msg}", text); break;
-            case LLamaLogLevel.Warning: Log.Warning("[llama] {Msg}", text); break;
+            case LLamaLogLevel.Warning:
+                if (benignWarningSubstrings.Any(s => text!.Contains(s, StringComparison.Ordinal))) break;
+                Log.Warning("[llama] {Msg}", text);
+                break;
             case LLamaLogLevel.Info:
                 if (verboseNativeLogs) Log.Information("[llama] {Msg}", text);
                 break;
