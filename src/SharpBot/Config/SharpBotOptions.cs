@@ -29,9 +29,15 @@ public sealed class BuiltInToolsOptions
 public sealed class LlmOptions
 {
     public string ModelPath { get; set; } = "";
-    public int ContextSize { get; set; } = 4096;
+    public int ContextSize { get; set; } = 8192;
     public int GpuLayerCount { get; set; }
     public string SystemPrompt { get; set; } = "";
+
+    /// <summary>
+    /// When true, routes llama.cpp's Info/Debug native logs through Serilog (very chatty).
+    /// When false (default), only Warn/Error native logs surface — keeps startup output clean.
+    /// </summary>
+    public bool VerboseNativeLogs { get; set; }
 }
 
 public sealed class TelegramOptions

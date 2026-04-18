@@ -1,4 +1,5 @@
 using System.Reflection;
+using LLama.Native;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -33,6 +34,26 @@ try
                 "sharpbot-.log"),
             rollingInterval: RollingInterval.Day)
         .CreateLogger();
+
+    // Route llama.cpp's native stderr spam through Serilog so it obeys our log level config.
+    // Info/Debug are dropped unless SharpBot:Llm:VerboseNativeLogs=true — keeps startup readable.
+    var verboseNativeLogs = configuration.GetValue<bool>("SharpBot:Llm:VerboseNativeLogs");
+    NativeLibraryConfig.All.WithLogCallback((level, message) =>
+    {
+        var text = message?.TrimEnd('\n', '\r', ' ');
+        if (string.IsNullOrEmpty(text)) return;
+        switch (level)
+        {
+            case LLamaLogLevel.Error: Log.Error("[llama] {Msg}", text); break;
+            case LLamaLogLevel.Warning: Log.Warning("[llama] {Msg}", text); break;
+            case LLamaLogLevel.Info:
+                if (verboseNativeLogs) Log.Information("[llama] {Msg}", text);
+                break;
+            default:
+                if (verboseNativeLogs) Log.Debug("[llama] {Msg}", text);
+                break;
+        }
+    });
 
     var services = new ServiceCollection();
     services.AddSingleton<IConfiguration>(configuration);

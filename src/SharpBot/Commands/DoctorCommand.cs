@@ -31,7 +31,9 @@ public sealed class DoctorCommand : Command<DoctorCommand.Settings>
 
         Add(table, "Model file",
             File.Exists(_options.Llm.ModelPath),
-            _options.Llm.ModelPath);
+            File.Exists(_options.Llm.ModelPath)
+                ? $"{_options.Llm.ModelPath} ({FormatBytes(new FileInfo(_options.Llm.ModelPath).Length)})"
+                : _options.Llm.ModelPath);
 
         Add(table, "Telegram token",
             !string.IsNullOrWhiteSpace(_secrets.Get(SecretKeys.TelegramBotToken)),
@@ -54,4 +56,12 @@ public sealed class DoctorCommand : Command<DoctorCommand.Settings>
         var status = ok ? "[green]OK[/]" : "[red]MISSING[/]";
         table.AddRow(label, status, detail);
     }
+
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        >= 1_000_000_000 => $"{bytes / 1_000_000_000.0:F2} GB",
+        >= 1_000_000 => $"{bytes / 1_000_000.0:F1} MB",
+        >= 1_000 => $"{bytes / 1_000.0:F0} KB",
+        _ => $"{bytes} B",
+    };
 }
