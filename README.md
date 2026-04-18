@@ -35,7 +35,46 @@ On first run, `setup` walks you through model selection and downloads a GGUF to 
 | `sharpbot hf logout` | Remove the saved token. |
 | `sharpbot hf status` | Show whether a token is saved. |
 | `sharpbot pair` | Pair a Telegram user — first message to the bot wins. |
+| `sharpbot mcp list` | List configured MCP servers and discovered tools. |
+| `sharpbot mcp test server.tool '{"arg":"value"}'` | Invoke a single MCP tool directly (debug). |
 | `sharpbot doctor` | Sanity-check config, model file, tokens, MCP servers. |
+
+## MCP tool servers
+
+SharpBot acts as a client to any [Model Context Protocol](https://modelcontextprotocol.io) server, giving the LLM access to tools like filesystem access, web fetch, Telegram messaging, calendar, etc.
+
+Configure servers under `SharpBot:Mcp:Servers` in `appsettings.json` or `data/user-config.json`:
+
+```json
+{
+  "SharpBot": {
+    "Mcp": {
+      "Servers": [
+        {
+          "Name": "fs",
+          "Command": "npx",
+          "Args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+        },
+        {
+          "Name": "fetch",
+          "Command": "uvx",
+          "Args": ["mcp-server-fetch"]
+        }
+      ]
+    }
+  }
+}
+```
+
+Each server gets a short `Name` used as a tool-name prefix (tool `read_file` on server `fs` appears to the LLM as `fs.read_file`). This avoids collisions when multiple servers expose similar tools.
+
+**Verify connectivity:**
+```bash
+sharpbot mcp list           # spawn configured servers, list their tools
+sharpbot mcp test fs.read_file '{"path":"./workspace/README.md"}'
+```
+
+Note: MCP servers themselves have their own runtime requirements. Most official ones are Node packages (`npx -y @modelcontextprotocol/server-*`) and require Node.js installed. Python servers use `uvx`. SharpBot stays zero-dependency — *you* choose which tool runtimes to install based on which servers you want.
 
 ## Gated models (Gemma, Llama, etc.)
 

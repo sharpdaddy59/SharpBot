@@ -78,6 +78,15 @@ try
                 .WithDescription("Show whether a token is saved.");
         });
 
+        config.AddBranch("mcp", mcp =>
+        {
+            mcp.SetDescription("Manage and debug MCP (Model Context Protocol) tool servers.");
+            mcp.AddCommand<McpListCommand>("list")
+                .WithDescription("List configured MCP servers and their tools.");
+            mcp.AddCommand<McpTestCommand>("test")
+                .WithDescription("Invoke a single MCP tool by qualified name ('server.tool') with JSON args.");
+        });
+
         config.AddBranch("tg", tg =>
         {
             tg.SetDescription("Manage the Telegram bot token.");

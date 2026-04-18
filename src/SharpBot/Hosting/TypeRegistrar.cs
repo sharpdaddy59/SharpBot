@@ -31,6 +31,16 @@ public sealed class TypeResolver : ITypeResolver, IDisposable
 
     public void Dispose()
     {
-        if (_provider is IDisposable d) d.Dispose();
+        // Services registered via AddSingleton may only implement IAsyncDisposable (e.g. MCP clients).
+        // ServiceProvider's sync Dispose throws when it meets one of those, so drive the async path
+        // when available.
+        if (_provider is IAsyncDisposable asyncDisposable)
+        {
+            asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        else if (_provider is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
     }
 }
