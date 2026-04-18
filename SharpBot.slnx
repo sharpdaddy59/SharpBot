@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/SharpBot/SharpBot.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SharpBot.Tests/SharpBot.Tests.csproj" />
+  </Folder>
 </Solution>

@@ -29,12 +29,20 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<FetchUrlTool>();
         services.AddHttpClient<WeatherTool>(c => c.Timeout = TimeSpan.FromSeconds(15));
 
+        // Shared stores used by built-in tools.
+        services.AddSingleton<NoteStore>();
+
         // Built-in tools: each IBuiltInTool instance is discovered by BuiltInToolHost via DI.
         services.AddSingleton<IBuiltInTool, CurrentTimeTool>();
+        services.AddSingleton<IBuiltInTool, CalculatorTool>();
         services.AddSingleton<IBuiltInTool>(sp => sp.GetRequiredService<FetchUrlTool>());
         services.AddSingleton<IBuiltInTool>(sp => sp.GetRequiredService<WeatherTool>());
         services.AddSingleton<IBuiltInTool, ReadFileTool>();
         services.AddSingleton<IBuiltInTool, ListFilesTool>();
+        services.AddSingleton<IBuiltInTool, SaveNoteTool>();
+        services.AddSingleton<IBuiltInTool, RecallNoteTool>();
+        services.AddSingleton<IBuiltInTool, ListNotesTool>();
+        services.AddSingleton<IBuiltInTool, DeleteNoteTool>();
 
         // Tool hosts: built-in + MCP are both concrete singletons, aggregated behind IToolHost.
         services.AddSingleton<BuiltInToolHost>();

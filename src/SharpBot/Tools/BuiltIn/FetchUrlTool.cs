@@ -131,7 +131,7 @@ public sealed partial class FetchUrlTool : IBuiltInTool
     /// decode entities, collapse whitespace. Not a real parser — aims to keep the token count small
     /// enough that marketing pages fit in an 8K-token context.
     /// </summary>
-    private static string StripHtml(string html)
+    internal static string StripHtml(string html)
     {
         html = ScriptOrStyleBlock().Replace(html, " ");
         html = TagRegex().Replace(html, " ");

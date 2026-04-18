@@ -36,10 +36,10 @@ jobs:
             archive: tar
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -96,7 +96,7 @@ jobs:
           tar czf ../sharpbot-${{ steps.ver.outputs.tag }}-${{ matrix.name }}.tar.gz sharpbot/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sharpbot-${{ matrix.name }}
           path: sharpbot-${{ steps.ver.outputs.tag }}-${{ matrix.name }}.*
@@ -107,9 +107,9 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
           merge-multiple: true

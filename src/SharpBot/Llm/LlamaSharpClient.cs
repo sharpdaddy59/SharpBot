@@ -257,7 +257,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
     /// Pull Qwen-style &lt;tool_call&gt; blocks out of the raw model output. Returns the remaining
     /// user-facing text (with those blocks removed) and the list of parsed calls.
     /// </summary>
-    private static (string Text, IReadOnlyList<ToolCall> Calls) ExtractToolCalls(string raw)
+    internal static (string Text, IReadOnlyList<ToolCall> Calls) ExtractToolCalls(string raw)
     {
         var matches = ToolCallRegex().Matches(raw);
         if (matches.Count == 0) return (raw, Array.Empty<ToolCall>());

@@ -9,8 +9,14 @@ public sealed class ConfigWriter
     private readonly Lock _lock = new();
 
     public ConfigWriter()
+        : this(System.IO.Path.Combine(AppContext.BaseDirectory, "data", "user-config.json"))
     {
-        _path = System.IO.Path.Combine(AppContext.BaseDirectory, "data", "user-config.json");
+    }
+
+    // Exposed to tests so they can write to a temp file instead of the binary's output folder.
+    internal ConfigWriter(string path)
+    {
+        _path = path;
     }
 
     public string FilePath => _path;
