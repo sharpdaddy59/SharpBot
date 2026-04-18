@@ -48,6 +48,9 @@ try
         config.AddCommand<RunCommand>("run")
             .WithDescription("Run the bot (default when no command given).");
 
+        config.AddCommand<ChatCommand>("chat")
+            .WithDescription("Local chat REPL — talk to the model from the console (no Telegram needed).");
+
         config.AddCommand<SetupCommand>("setup")
             .WithDescription("Interactive first-run wizard — pick a model, paste a Telegram token, pair a user.");
 

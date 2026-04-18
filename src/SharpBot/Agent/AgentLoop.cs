@@ -34,6 +34,7 @@ public sealed class AgentLoop
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        await _llm.InitializeAsync(cancellationToken).ConfigureAwait(false);
         await _tools.InitializeAsync(cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("AgentLoop started. Tools available: {Count}", _tools.AvailableTools.Count);
 
