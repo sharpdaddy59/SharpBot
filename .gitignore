@@ -1,0 +1,24 @@
+# Build output
+bin/
+obj/
+*.user
+*.suo
+
+# Runtime data — secrets, logs, conversation state
+data/
+
+# Local LLM models (large binary files)
+models/
+
+# IDE
+.vs/
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Publish output
+publish/
+out/
