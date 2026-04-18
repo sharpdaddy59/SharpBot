@@ -9,7 +9,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- ICU data is required for TimeZoneInfo to resolve IANA names (e.g. "Asia/Tokyo")
+         uniformly across Windows/Linux/macOS. Worth ~15 MB of binary size. -->
   </PropertyGroup>
 
   <ItemGroup>

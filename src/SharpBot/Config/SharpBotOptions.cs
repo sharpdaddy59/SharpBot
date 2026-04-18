@@ -16,8 +16,11 @@ public sealed class BuiltInToolsOptions
     /// <summary>Path used as the sandbox root for file-system built-ins (read_file, list_files).</summary>
     public string WorkspaceDirectory { get; set; } = "workspace";
 
-    /// <summary>Max bytes of response body the fetch_url tool will return. Responses beyond are truncated.</summary>
-    public int FetchMaxBytes { get; set; } = 100_000;
+    /// <summary>Max bytes of raw response body the fetch_url tool will consume. Responses beyond are truncated.</summary>
+    public int FetchMaxBytes { get; set; } = 30_000;
+
+    /// <summary>When true, HTML responses are stripped to visible text before being returned to the model.</summary>
+    public bool FetchStripHtml { get; set; } = true;
 
     /// <summary>Timeout in seconds for the fetch_url tool.</summary>
     public int FetchTimeoutSeconds { get; set; } = 20;

@@ -1,12 +1,14 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using SharpBot.Config;
 
 namespace SharpBot.Tools.BuiltIn;
 
-public sealed class FetchUrlTool : IBuiltInTool
+public sealed partial class FetchUrlTool : IBuiltInTool
 {
     private readonly HttpClient _http;
     private readonly BuiltInToolsOptions _options;
@@ -19,8 +21,8 @@ public sealed class FetchUrlTool : IBuiltInTool
 
     public string Name => "fetch_url";
     public string Description =>
-        "GET an http/https URL and return the response body as text. Truncated if the response is very large. " +
-        "Use this to look up information on public web pages.";
+        "GET an http/https URL and return the response body as text. HTML is stripped to visible text. " +
+        "Truncated if the response is very large. Use this to look up information on public web pages or APIs.";
 
     public string ParametersJsonSchema => """
         {
@@ -84,7 +86,6 @@ public sealed class FetchUrlTool : IBuiltInTool
             var truncated = false;
             if (total == buffer.Length)
             {
-                // Check if there's more
                 var probe = new byte[1];
                 var extra = await stream.ReadAsync(probe.AsMemory(0, 1), cts.Token).ConfigureAwait(false);
                 if (extra > 0) truncated = true;
@@ -92,6 +93,15 @@ public sealed class FetchUrlTool : IBuiltInTool
 
             var encoding = DetectEncoding(response.Content.Headers.ContentType?.CharSet);
             var text = encoding.GetString(buffer, 0, total);
+
+            // Strip HTML markup — marketing sites will blow the context otherwise.
+            var mediaType = response.Content.Headers.ContentType?.MediaType;
+            var isHtml = mediaType is not null &&
+                         mediaType.Contains("html", StringComparison.OrdinalIgnoreCase);
+            if (isHtml && _options.FetchStripHtml)
+            {
+                text = StripHtml(text);
+            }
 
             if (truncated)
             {
@@ -115,4 +125,27 @@ public sealed class FetchUrlTool : IBuiltInTool
         try { return Encoding.GetEncoding(charset.Trim('"')); }
         catch { return Encoding.UTF8; }
     }
+
+    /// <summary>
+    /// Best-effort HTML-to-text: drop &lt;script&gt;/&lt;style&gt; blocks, remove remaining tags,
+    /// decode entities, collapse whitespace. Not a real parser — aims to keep the token count small
+    /// enough that marketing pages fit in an 8K-token context.
+    /// </summary>
+    private static string StripHtml(string html)
+    {
+        html = ScriptOrStyleBlock().Replace(html, " ");
+        html = TagRegex().Replace(html, " ");
+        html = WebUtility.HtmlDecode(html);
+        html = WhitespaceRegex().Replace(html, " ").Trim();
+        return html;
+    }
+
+    [GeneratedRegex(@"<(script|style)[^>]*>.*?</\1>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex ScriptOrStyleBlock();
+
+    [GeneratedRegex(@"<[^>]+>")]
+    private static partial Regex TagRegex();
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRegex();
 }

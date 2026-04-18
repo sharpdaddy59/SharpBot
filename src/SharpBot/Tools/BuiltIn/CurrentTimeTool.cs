@@ -6,9 +6,11 @@ namespace SharpBot.Tools.BuiltIn;
 public sealed class CurrentTimeTool : IBuiltInTool
 {
     public string Name => "current_time";
+
     public string Description =>
-        "Returns the current date and time. Pass an optional IANA timezone name (e.g. 'America/New_York'). " +
-        "Defaults to the system's local time.";
+        "Returns the current date and time. Pass an optional IANA timezone name " +
+        "(e.g. 'UTC', 'Asia/Tokyo', 'Europe/London', 'America/New_York', 'America/Los_Angeles'). " +
+        "Omit the argument to get the system's local time.";
 
     public string ParametersJsonSchema => """
         {
@@ -16,7 +18,7 @@ public sealed class CurrentTimeTool : IBuiltInTool
           "properties": {
             "timezone": {
               "type": "string",
-              "description": "Optional IANA timezone name (e.g. 'UTC', 'America/New_York', 'Europe/London')."
+              "description": "Optional IANA timezone name. Examples: 'UTC', 'Asia/Tokyo', 'Europe/London', 'America/New_York'."
             }
           }
         }
@@ -39,22 +41,50 @@ public sealed class CurrentTimeTool : IBuiltInTool
             now = DateTimeOffset.Now;
             zoneLabel = TimeZoneInfo.Local.Id;
         }
+        else if (TryResolveTimeZone(tz, out var zone))
+        {
+            now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone);
+            zoneLabel = zone.Id;
+        }
         else
         {
-            try
-            {
-                var zone = TimeZoneInfo.FindSystemTimeZoneById(tz);
-                now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone);
-                zoneLabel = zone.Id;
-            }
-            catch (TimeZoneNotFoundException)
-            {
-                return Task.FromResult($"Unknown timezone: {tz}. Try 'UTC' or an IANA name like 'America/New_York'.");
-            }
+            return Task.FromResult(
+                $"Unknown timezone: '{tz}'. Use an IANA name like 'UTC', 'Asia/Tokyo', 'Europe/London', or 'America/New_York'.");
         }
 
         var iso = now.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture);
         var friendly = now.ToString("dddd, MMMM d, yyyy h:mm tt", CultureInfo.InvariantCulture);
         return Task.FromResult($"{friendly} ({zoneLabel}) — {iso}");
+    }
+
+    /// <summary>
+    /// Accept an IANA or Windows timezone identifier and convert as needed. Falls back
+    /// through alternate forms so the model doesn't have to know which flavor the host OS uses.
+    /// </summary>
+    private static bool TryResolveTimeZone(string tz, out TimeZoneInfo zone)
+    {
+        // Direct lookup handles both IANA (on Linux/macOS, and Windows with ICU) and Windows names.
+        try
+        {
+            zone = TimeZoneInfo.FindSystemTimeZoneById(tz);
+            return true;
+        }
+        catch (TimeZoneNotFoundException) { }
+        catch (InvalidTimeZoneException) { }
+
+        // Try converting between IANA and Windows representations.
+        if (TimeZoneInfo.TryConvertIanaIdToWindowsId(tz, out var winId))
+        {
+            try { zone = TimeZoneInfo.FindSystemTimeZoneById(winId); return true; }
+            catch { }
+        }
+        if (TimeZoneInfo.TryConvertWindowsIdToIanaId(tz, out var ianaId))
+        {
+            try { zone = TimeZoneInfo.FindSystemTimeZoneById(ianaId); return true; }
+            catch { }
+        }
+
+        zone = null!;
+        return false;
     }
 }
