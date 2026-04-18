@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using LLama;
 using LLama.Common;
 using LLama.Sampling;
@@ -9,7 +11,7 @@ using SharpBot.Config;
 
 namespace SharpBot.Llm;
 
-public sealed class LlamaSharpClient : ILlmClient
+public sealed partial class LlamaSharpClient : ILlmClient
 {
     // Anti-prompts as a last line of defense. When the model's chat template is applied
     // correctly the native EOT tokens already stop generation, but these catch cases
@@ -81,21 +83,15 @@ public sealed class LlamaSharpClient : ILlmClient
         try
         {
             // Render the conversation using the model's native chat template from the GGUF metadata.
-            // For Qwen this produces ChatML (<|im_start|>role\ncontent<|im_end|>), for Gemma its own
-            // format, for Llama 3 yet another — handled transparently by the GGUF's template.
+            // If tools are available, we inject their definitions into the system message using Qwen's
+            // native tool-calling conventions (works directly on Qwen 2.5; degrades gracefully on others
+            // since a model that doesn't understand the format will simply not emit tool_call blocks).
+            var effective = InjectToolDefinitions(conversation, availableTools);
+
             var template = new LLamaTemplate(_weights!, strict: true) { AddAssistant = true };
-            foreach (var m in conversation)
+            foreach (var rendered in effective.SelectMany(RenderMessage))
             {
-                var role = m.Role switch
-                {
-                    ChatRole.System => "system",
-                    ChatRole.User => "user",
-                    ChatRole.Assistant => "assistant",
-                    _ => null, // Tool messages not supported in v0.1
-                };
-                if (role is null) continue;
-                if (string.IsNullOrEmpty(m.Content)) continue; // skip empty assistant placeholders
-                template.Add(role, m.Content);
+                template.Add(rendered.Role, rendered.Content);
             }
 
             var promptSpan = template.Apply();
@@ -118,22 +114,192 @@ public sealed class LlamaSharpClient : ILlmClient
                 sb.Append(chunk);
             }
 
-            var text = sb.ToString().Trim();
+            var raw = sb.ToString().Trim();
             foreach (var stop in CommonAntiPrompts)
             {
-                if (text.EndsWith(stop, StringComparison.Ordinal))
+                if (raw.EndsWith(stop, StringComparison.Ordinal))
                 {
-                    text = text[..^stop.Length].TrimEnd();
+                    raw = raw[..^stop.Length].TrimEnd();
                 }
             }
 
-            return new LlmResponse(text, Array.Empty<ToolCall>());
+            var (text, calls) = ExtractToolCalls(raw);
+            return new LlmResponse(text, calls);
         }
         finally
         {
             _inferLock.Release();
         }
     }
+
+    /// <summary>
+    /// If tools are available, weave them into the conversation's system message using Qwen's format.
+    /// Returns the original list unchanged when no tools are supplied.
+    /// </summary>
+    private static List<ChatMessage> InjectToolDefinitions(
+        IReadOnlyList<ChatMessage> conversation,
+        IReadOnlyList<ToolDescriptor> availableTools)
+    {
+        var result = new List<ChatMessage>(conversation);
+        if (availableTools.Count == 0) return result;
+
+        var toolSection = BuildToolsSystemSection(availableTools);
+
+        var firstIdx = result.FindIndex(m => m.Role == ChatRole.System);
+        if (firstIdx >= 0)
+        {
+            var existing = result[firstIdx];
+            var combined = string.IsNullOrWhiteSpace(existing.Content)
+                ? toolSection
+                : existing.Content.TrimEnd() + "\n\n" + toolSection;
+            result[firstIdx] = existing with { Content = combined };
+        }
+        else
+        {
+            result.Insert(0, new ChatMessage(ChatRole.System, toolSection));
+        }
+        return result;
+    }
+
+    private static string BuildToolsSystemSection(IReadOnlyList<ToolDescriptor> tools)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# Tools");
+        sb.AppendLine();
+        sb.AppendLine("You may call one or more functions to assist with the user query.");
+        sb.AppendLine();
+        sb.AppendLine("You are provided with function signatures within <tools></tools> XML tags:");
+        sb.AppendLine("<tools>");
+        foreach (var tool in tools)
+        {
+            JsonElement parameters;
+            try
+            {
+                parameters = JsonDocument.Parse(tool.ParametersJsonSchema).RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                parameters = JsonDocument.Parse("""{"type":"object"}""").RootElement.Clone();
+            }
+
+            var entry = new
+            {
+                type = "function",
+                function = new
+                {
+                    name = tool.Name,
+                    description = tool.Description,
+                    parameters = parameters,
+                },
+            };
+            sb.AppendLine(JsonSerializer.Serialize(entry));
+        }
+        sb.AppendLine("</tools>");
+        sb.AppendLine();
+        sb.AppendLine("For each function call, return a json object with function name and arguments");
+        sb.AppendLine("within <tool_call></tool_call> XML tags:");
+        sb.AppendLine("<tool_call>");
+        sb.AppendLine("{\"name\": <function-name>, \"arguments\": <args-json-object>}");
+        sb.Append("</tool_call>");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Translate one ChatMessage into zero or more (role, content) entries fed to LLamaTemplate.
+    /// Handles the assistant-with-tool-calls case (embed <tool_call> blocks in the assistant turn)
+    /// and the tool-result case (role "tool" so the model's chat template wraps it appropriately).
+    /// </summary>
+    private static IEnumerable<(string Role, string Content)> RenderMessage(ChatMessage message)
+    {
+        var role = message.Role switch
+        {
+            ChatRole.System => "system",
+            ChatRole.User => "user",
+            ChatRole.Assistant => "assistant",
+            ChatRole.Tool => "tool",
+            _ => null,
+        };
+        if (role is null) yield break;
+
+        if (message.Role == ChatRole.Assistant && message.ToolCalls is { Count: > 0 })
+        {
+            var sb = new StringBuilder();
+            if (!string.IsNullOrWhiteSpace(message.Content)) sb.AppendLine(message.Content);
+            foreach (var call in message.ToolCalls)
+            {
+                sb.AppendLine("<tool_call>");
+                sb.AppendLine($"{{\"name\": \"{call.Name}\", \"arguments\": {NormalizeArgsJson(call.ArgumentsJson)}}}");
+                sb.AppendLine("</tool_call>");
+            }
+            yield return (role, sb.ToString().TrimEnd());
+            yield break;
+        }
+
+        if (string.IsNullOrEmpty(message.Content) && message.Role != ChatRole.Tool) yield break;
+        yield return (role, message.Content);
+    }
+
+    private static string NormalizeArgsJson(string? argsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argsJson)) return "{}";
+        try
+        {
+            using var doc = JsonDocument.Parse(argsJson);
+            return doc.RootElement.GetRawText();
+        }
+        catch (JsonException)
+        {
+            return "{}";
+        }
+    }
+
+    /// <summary>
+    /// Pull Qwen-style &lt;tool_call&gt; blocks out of the raw model output. Returns the remaining
+    /// user-facing text (with those blocks removed) and the list of parsed calls.
+    /// </summary>
+    private static (string Text, IReadOnlyList<ToolCall> Calls) ExtractToolCalls(string raw)
+    {
+        var matches = ToolCallRegex().Matches(raw);
+        if (matches.Count == 0) return (raw, Array.Empty<ToolCall>());
+
+        var calls = new List<ToolCall>();
+        foreach (Match m in matches)
+        {
+            var json = m.Groups[1].Value.Trim();
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("name", out var nameEl)) continue;
+                var name = nameEl.GetString();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+
+                string argsJson = "{}";
+                if (root.TryGetProperty("arguments", out var argsEl))
+                {
+                    argsJson = argsEl.ValueKind switch
+                    {
+                        JsonValueKind.String => argsEl.GetString() ?? "{}",
+                        JsonValueKind.Object => argsEl.GetRawText(),
+                        _ => argsEl.GetRawText(),
+                    };
+                }
+
+                var id = "call_" + Guid.NewGuid().ToString("N")[..8];
+                calls.Add(new ToolCall(id, name!, argsJson));
+            }
+            catch (JsonException)
+            {
+                // Skip malformed — the model will learn from absence of a tool result.
+            }
+        }
+
+        var cleaned = ToolCallRegex().Replace(raw, string.Empty).Trim();
+        return (cleaned, calls);
+    }
+
+    [GeneratedRegex(@"<tool_call>\s*(\{.*?\})\s*</tool_call>", RegexOptions.Singleline)]
+    private static partial Regex ToolCallRegex();
 
     public ValueTask DisposeAsync()
     {
