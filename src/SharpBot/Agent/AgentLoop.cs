@@ -69,7 +69,8 @@ public sealed class AgentLoop
         const int maxToolIterations = 8;
         for (var i = 0; i < maxToolIterations; i++)
         {
-            var response = await _llm.InferAsync(convo.Messages, _tools.AvailableTools, cancellationToken)
+            var response = await _llm
+                .InferAsync(incoming.ChatId, convo.Messages, _tools.AvailableTools, cancellationToken)
                 .ConfigureAwait(false);
 
             convo.Append(new ChatMessage(ChatRole.Assistant, response.Text ?? string.Empty, response.ToolCalls));

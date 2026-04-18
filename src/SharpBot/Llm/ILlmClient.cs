@@ -13,9 +13,16 @@ public interface ILlmClient : IAsyncDisposable
     /// <summary>
     /// Runs a single round of inference over the provided conversation and available tool schemas.
     /// Returns the assistant's response (text + any tool calls). Stateless from the caller's point of view —
-    /// the full conversation must be passed on every call.
+    /// the full conversation must be passed on every call — but the implementation may cache KV state
+    /// per <paramref name="conversationId"/> so follow-up turns only prefill the new tokens.
     /// </summary>
+    /// <param name="conversationId">
+    /// Stable identifier for the conversation (Telegram chat id, REPL session id, etc.). Used by the
+    /// client to key a KV-cache per conversation. Assumes the conversation list grows monotonically
+    /// between calls for the same id; on any divergence the cache is reset transparently.
+    /// </param>
     Task<LlmResponse> InferAsync(
+        string conversationId,
         IReadOnlyList<ChatMessage> conversation,
         IReadOnlyList<ToolDescriptor> availableTools,
         CancellationToken cancellationToken = default);

@@ -29,9 +29,13 @@ public sealed partial class LlamaSharpClient : ILlmClient
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly SemaphoreSlim _inferLock = new(1, 1);
 
+    // Per-conversation state: each gets its own LLamaContext + InteractiveExecutor so that
+    // the KV cache persists across turns and only new tokens get prefilled.
+    private readonly Dictionary<string, ConversationState> _states =
+        new(StringComparer.Ordinal);
+
     private ModelParams? _modelParams;
     private LLamaWeights? _weights;
-    private StatelessExecutor? _executor;
 
     public LlamaSharpClient(IOptions<SharpBotOptions> options, ILogger<LlamaSharpClient> logger)
     {
@@ -41,12 +45,12 @@ public sealed partial class LlamaSharpClient : ILlmClient
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        if (_executor is not null) return;
+        if (_weights is not null) return;
 
         await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_executor is not null) return;
+            if (_weights is not null) return;
 
             if (!File.Exists(_options.ModelPath))
             {
@@ -63,8 +67,8 @@ public sealed partial class LlamaSharpClient : ILlmClient
             };
 
             _weights = await LLamaWeights.LoadFromFileAsync(_modelParams, cancellationToken).ConfigureAwait(false);
-            _executor = new StatelessExecutor(_weights, _modelParams);
-            _logger.LogInformation("Model ready.");
+            _logger.LogInformation("Model ready. Per-conversation KV cache reuse enabled (max {N} active).",
+                Math.Max(1, _options.MaxActiveConversations));
         }
         finally
         {
@@ -73,6 +77,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
     }
 
     public async Task<LlmResponse> InferAsync(
+        string conversationId,
         IReadOnlyList<ChatMessage> conversation,
         IReadOnlyList<ToolDescriptor> availableTools,
         CancellationToken cancellationToken = default)
@@ -82,20 +87,48 @@ public sealed partial class LlamaSharpClient : ILlmClient
         await _inferLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            // Render the conversation using the model's native chat template from the GGUF metadata.
-            // If tools are available, we inject their definitions into the system message using Qwen's
-            // native tool-calling conventions (works directly on Qwen 2.5; degrades gracefully on others
-            // since a model that doesn't understand the format will simply not emit tool_call blocks).
-            var effective = InjectToolDefinitions(conversation, availableTools);
+            var state = GetOrCreateState(conversationId);
+            state.LastUsed = DateTimeOffset.UtcNow;
 
+            // Render the full prompt (including tool injection and the trailing assistant marker)
+            // using the GGUF's native chat template.
+            var effective = InjectToolDefinitions(conversation, availableTools);
             var template = new LLamaTemplate(_weights!, strict: true) { AddAssistant = true };
             foreach (var rendered in effective.SelectMany(RenderMessage))
             {
                 template.Add(rendered.Role, rendered.Content);
             }
+            var fullPrompt = LLamaTemplate.Encoding.GetString(template.Apply().ToArray());
 
-            var promptSpan = template.Apply();
-            var prompt = LLamaTemplate.Encoding.GetString(promptSpan.ToArray());
+            // If the new rendering extends what this conversation's executor has already
+            // processed, we only need to prefill the delta. Otherwise reset the cache —
+            // something changed (tool list, older turn edited, ...) and KV state is stale.
+            string delta;
+            if (state.ProcessedText.Length > 0 &&
+                fullPrompt.StartsWith(state.ProcessedText, StringComparison.Ordinal))
+            {
+                delta = fullPrompt[state.ProcessedText.Length..];
+                _logger.LogDebug(
+                    "Conversation {Id}: KV-cache hit — prefilling {DeltaBytes} new bytes of {FullBytes}.",
+                    conversationId, delta.Length, fullPrompt.Length);
+            }
+            else
+            {
+                if (state.ProcessedText.Length > 0)
+                {
+                    _logger.LogInformation(
+                        "Conversation {Id}: KV-cache miss — resetting and doing a full prefill.",
+                        conversationId);
+                }
+                state.Reset(_weights!, _modelParams!);
+                delta = fullPrompt;
+            }
+
+            if (delta.Length == 0)
+            {
+                // Nothing new to infer. Caller fed the same conversation twice.
+                return new LlmResponse(string.Empty, Array.Empty<ToolCall>());
+            }
 
             var inferenceParams = new InferenceParams
             {
@@ -109,12 +142,19 @@ public sealed partial class LlamaSharpClient : ILlmClient
             };
 
             var sb = new StringBuilder();
-            await foreach (var chunk in _executor!.InferAsync(prompt, inferenceParams, cancellationToken).ConfigureAwait(false))
+            await foreach (var chunk in state.Executor!.InferAsync(delta, inferenceParams, cancellationToken).ConfigureAwait(false))
             {
                 sb.Append(chunk);
             }
 
-            var raw = sb.ToString().Trim();
+            // Record everything the executor now has in its KV cache so the next call can
+            // compute an accurate delta. The executor processed `delta` (our prefilled tokens)
+            // plus whatever it generated on top.
+            var generated = sb.ToString();
+            state.ProcessedText = fullPrompt + generated;
+
+            // Strip trailing anti-prompt tokens that may have leaked into the visible output.
+            var raw = generated.Trim();
             foreach (var stop in CommonAntiPrompts)
             {
                 if (raw.EndsWith(stop, StringComparison.Ordinal))
@@ -130,6 +170,36 @@ public sealed partial class LlamaSharpClient : ILlmClient
         {
             _inferLock.Release();
         }
+    }
+
+    private ConversationState GetOrCreateState(string conversationId)
+    {
+        if (_states.TryGetValue(conversationId, out var existing))
+        {
+            return existing;
+        }
+
+        EvictIfNeeded();
+
+        var state = new ConversationState { LastUsed = DateTimeOffset.UtcNow };
+        state.Reset(_weights!, _modelParams!);
+        _states[conversationId] = state;
+        _logger.LogInformation("Conversation {Id}: created new KV cache ({Active} active).",
+            conversationId, _states.Count);
+        return state;
+    }
+
+    private void EvictIfNeeded()
+    {
+        var max = Math.Max(1, _options.MaxActiveConversations);
+        if (_states.Count < max) return;
+
+        var oldest = _states.OrderBy(kv => kv.Value.LastUsed).First();
+        _logger.LogInformation(
+            "Evicting conversation {Id} (LRU, idle for {Idle}).",
+            oldest.Key, DateTimeOffset.UtcNow - oldest.Value.LastUsed);
+        oldest.Value.Dispose();
+        _states.Remove(oldest.Key);
     }
 
     /// <summary>
@@ -189,7 +259,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
                 {
                     name = tool.Name,
                     description = tool.Description,
-                    parameters = parameters,
+                    parameters,
                 },
             };
             sb.AppendLine(JsonSerializer.Serialize(entry));
@@ -274,7 +344,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
                 var name = nameEl.GetString();
                 if (string.IsNullOrWhiteSpace(name)) continue;
 
-                string argsJson = "{}";
+                var argsJson = "{}";
                 if (root.TryGetProperty("arguments", out var argsEl))
                 {
                     argsJson = argsEl.ValueKind switch
@@ -303,11 +373,38 @@ public sealed partial class LlamaSharpClient : ILlmClient
 
     public ValueTask DisposeAsync()
     {
-        _executor = null;
+        foreach (var state in _states.Values)
+        {
+            state.Dispose();
+        }
+        _states.Clear();
         _weights?.Dispose();
         _weights = null;
         _initLock.Dispose();
         _inferLock.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    private sealed class ConversationState : IDisposable
+    {
+        public LLamaContext? Context;
+        public InteractiveExecutor? Executor;
+        public string ProcessedText = string.Empty;
+        public DateTimeOffset LastUsed;
+
+        public void Reset(LLamaWeights weights, ModelParams modelParams)
+        {
+            Context?.Dispose();
+            Context = weights.CreateContext(modelParams);
+            Executor = new InteractiveExecutor(Context);
+            ProcessedText = string.Empty;
+        }
+
+        public void Dispose()
+        {
+            Executor = null;
+            Context?.Dispose();
+            Context = null;
+        }
     }
 }

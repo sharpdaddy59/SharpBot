@@ -38,6 +38,13 @@ public sealed class LlmOptions
     /// When false (default), only Warn/Error native logs surface — keeps startup output clean.
     /// </summary>
     public bool VerboseNativeLogs { get; set; }
+
+    /// <summary>
+    /// Maximum number of active per-conversation KV caches held in memory at once. When the
+    /// limit is reached, the least-recently-used conversation is evicted. Each cache costs
+    /// roughly 400–800 MB at 8K context for a 3B model — tune down on RAM-tight boxes.
+    /// </summary>
+    public int MaxActiveConversations { get; set; } = 4;
 }
 
 public sealed class TelegramOptions

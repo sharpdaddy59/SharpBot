@@ -66,6 +66,10 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
             convo.Add(new ChatMessage(ChatRole.System, _options.Llm.SystemPrompt));
         }
 
+        // Stable conversation id for the duration of this REPL session so the LLM client
+        // can reuse its KV cache between turns.
+        var conversationId = "repl-" + Guid.NewGuid().ToString("N")[..8];
+
         const int maxToolIterations = 8;
 
         while (!cancellationToken.IsCancellationRequested)
@@ -89,7 +93,7 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
                     response = await AnsiConsole.Status()
                         .Spinner(Spinner.Known.Dots)
                         .StartAsync(iteration == 0 ? "thinking..." : $"thinking (iteration {iteration + 1})...", async _ =>
-                            await _llm.InferAsync(convo, toolsForLlm, cancellationToken).ConfigureAwait(false))
+                            await _llm.InferAsync(conversationId, convo, toolsForLlm, cancellationToken).ConfigureAwait(false))
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { return 0; }
