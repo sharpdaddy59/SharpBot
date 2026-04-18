@@ -103,6 +103,13 @@ public sealed partial class LlamaSharpClient : ILlmClient
             // If the new rendering extends what this conversation's executor has already
             // processed, we only need to prefill the delta. Otherwise reset the cache —
             // something changed (tool list, older turn edited, ...) and KV state is stale.
+            //
+            // Subtlety: LlamaSharp's InteractiveExecutor consumes the EOT anti-prompt that
+            // stops generation but does NOT emit it in the streamed output. So after inference
+            // the KV cache contains one extra anti-prompt token beyond what we tracked. We
+            // account for that by retrying the prefix check against `state.ProcessedText` plus
+            // each possible anti-prompt. Whichever one aligns with the new rendering tells us
+            // what the model's EOT actually was, and we keep track of it for future calls.
             string delta;
             if (state.ProcessedText.Length > 0 &&
                 fullPrompt.StartsWith(state.ProcessedText, StringComparison.Ordinal))
@@ -111,6 +118,15 @@ public sealed partial class LlamaSharpClient : ILlmClient
                 _logger.LogDebug(
                     "Conversation {Id}: KV-cache hit — prefilling {DeltaBytes} new bytes of {FullBytes}.",
                     conversationId, delta.Length, fullPrompt.Length);
+            }
+            else if (state.ProcessedText.Length > 0 &&
+                     TryAlignWithAntiPrompt(state.ProcessedText, fullPrompt, out var extended, out var stop))
+            {
+                state.ProcessedText = extended;
+                delta = fullPrompt[extended.Length..];
+                _logger.LogDebug(
+                    "Conversation {Id}: KV-cache hit via trailing '{Stop}' — prefilling {DeltaBytes} of {FullBytes}.",
+                    conversationId, stop, delta.Length, fullPrompt.Length);
             }
             else
             {
@@ -187,6 +203,33 @@ public sealed partial class LlamaSharpClient : ILlmClient
         _logger.LogInformation("Conversation {Id}: created new KV cache ({Active} active).",
             conversationId, _states.Count);
         return state;
+    }
+
+    /// <summary>
+    /// Tries to make <paramref name="processed"/> align with <paramref name="fullPrompt"/> by
+    /// appending one of the known anti-prompt tokens. Returns true if any candidate lands the
+    /// extended string as a proper prefix of <paramref name="fullPrompt"/>. Used to recover the
+    /// EOT token that LlamaSharp's InteractiveExecutor consumes silently on stop.
+    /// </summary>
+    private static bool TryAlignWithAntiPrompt(
+        string processed,
+        string fullPrompt,
+        out string extended,
+        out string matchedStop)
+    {
+        foreach (var stop in CommonAntiPrompts)
+        {
+            var candidate = processed + stop;
+            if (fullPrompt.StartsWith(candidate, StringComparison.Ordinal))
+            {
+                extended = candidate;
+                matchedStop = stop;
+                return true;
+            }
+        }
+        extended = processed;
+        matchedStop = string.Empty;
+        return false;
     }
 
     private void EvictIfNeeded()
