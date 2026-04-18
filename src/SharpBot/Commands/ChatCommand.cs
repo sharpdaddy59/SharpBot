@@ -85,6 +85,8 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
             convo.Add(new ChatMessage(ChatRole.User, input));
 
             var finished = false;
+            string? previousCallSignature = null;
+            var stuckLoopDetected = false;
             for (var iteration = 0; iteration < maxToolIterations && !finished; iteration++)
             {
                 LlmResponse response;
@@ -120,6 +122,23 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
                     continue;
                 }
 
+                // Safety net: if the model emits the identical tool call two iterations in
+                // a row, it's not absorbing the tool result — almost always a model/template
+                // mismatch (e.g. Gemma ignoring role="tool" messages). Stop before we spin.
+                var currentSignature = string.Join("|",
+                    response.ToolCalls.Select(c => $"{c.Name}|{c.ArgumentsJson}"));
+                if (previousCallSignature is not null && currentSignature == previousCallSignature)
+                {
+                    AnsiConsole.MarkupLine(
+                        "[yellow]Model is repeating the same tool call — stopping before it loops.[/]");
+                    AnsiConsole.MarkupLine(
+                        "[grey]This usually means the model can't read its own tool results. Try a model with native tool support (Qwen 2.5 3B is recommended).[/]");
+                    stuckLoopDetected = true;
+                    finished = true;
+                    break;
+                }
+                previousCallSignature = currentSignature;
+
                 foreach (var call in response.ToolCalls)
                 {
                     AnsiConsole.MarkupLine($"[grey]→ {Markup.Escape(call.Name)}({Markup.Escape(Truncate(call.ArgumentsJson, 80))})[/]");
@@ -141,6 +160,7 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
             {
                 AnsiConsole.MarkupLine("[yellow](stopped — tool iteration limit reached)[/]");
             }
+            _ = stuckLoopDetected; // hint already shown above when true
         }
 
         return 0;

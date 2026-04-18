@@ -67,6 +67,8 @@ public sealed class AgentLoop
         convo.Append(new ChatMessage(ChatRole.User, incoming.Text));
 
         const int maxToolIterations = 8;
+        string? previousCallSignature = null;
+
         for (var i = 0; i < maxToolIterations; i++)
         {
             var response = await _llm
@@ -83,6 +85,26 @@ public sealed class AgentLoop
                 }
                 return;
             }
+
+            // Safety net: if the model emits the identical tool call two iterations in a row,
+            // it's not absorbing the tool result (model/template mismatch, e.g. Gemma dropping
+            // role="tool" messages). Stop before we hit maxIter and spin the fans.
+            var currentSignature = string.Join("|",
+                response.ToolCalls.Select(c => $"{c.Name}|{c.ArgumentsJson}"));
+            if (previousCallSignature is not null && currentSignature == previousCallSignature)
+            {
+                _logger.LogWarning(
+                    "{ChatId}: model repeated the same tool call twice — aborting loop to avoid fan-spin.",
+                    incoming.ChatId);
+                await _transport.SendAsync(
+                    incoming.ChatId,
+                    "Sorry — I got stuck calling the same tool repeatedly. " +
+                    "This usually means the current model doesn't handle tool results well. " +
+                    "Try switching to Qwen 2.5 3B (the recommended model for tool use).",
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            previousCallSignature = currentSignature;
 
             foreach (var call in response.ToolCalls)
             {
