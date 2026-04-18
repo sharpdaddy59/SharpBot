@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            name: win-x64
+            ext: .exe
+            archive: zip
+          - os: ubuntu-latest
+            rid: linux-x64
+            name: linux-x64
+            ext: ''
+            archive: tar
+          - os: macos-latest
+            rid: osx-arm64
+            name: osx-arm64
+            ext: ''
+            archive: tar
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Determine version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish self-contained single-file
+        shell: bash
+        run: |
+          dotnet publish src/SharpBot \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=embedded \
+            -p:Version=${{ steps.ver.outputs.version }} \
+            -p:InformationalVersion=${{ steps.ver.outputs.version }} \
+            -o publish/${{ matrix.rid }}
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p stage/sharpbot
+          cp publish/${{ matrix.rid }}/sharpbot${{ matrix.ext }} stage/sharpbot/
+          cp src/SharpBot/appsettings.json stage/sharpbot/
+          cp LICENSE stage/sharpbot/
+          cp README.md stage/sharpbot/
+          if [ "${{ matrix.ext }}" != ".exe" ]; then
+            chmod +x stage/sharpbot/sharpbot
+          fi
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          cd stage
+          7z a -tzip ../sharpbot-${{ steps.ver.outputs.tag }}-${{ matrix.name }}.zip sharpbot/
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          cd stage
+          tar czf ../sharpbot-${{ steps.ver.outputs.tag }}-${{ matrix.name }}.tar.gz sharpbot/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharpbot-${{ matrix.name }}
+          path: sharpbot-${{ steps.ver.outputs.tag }}-${{ matrix.name }}.*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Determine tag
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: SharpBot ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: artifacts/*
+          body: |
+            ## Install
+
+            1. Download the archive for your platform below.
+            2. Extract it — you'll get a `sharpbot/` folder.
+            3. `cd sharpbot`
+            4. Run `./sharpbot setup` (Linux/macOS) or `sharpbot.exe setup` (Windows).
+
+            Full docs: see the [README](https://github.com/sharpdaddy59/SharpBot#readme).
+
+            ## macOS note
+
+            Binaries are not code-signed. On first run you may see a Gatekeeper
+            warning. Clear it with:
+
+            ```bash
+            xattr -d com.apple.quarantine sharpbot
+            ```

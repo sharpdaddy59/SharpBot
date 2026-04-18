@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -43,7 +44,10 @@ try
     app.Configure(config =>
     {
         config.SetApplicationName("sharpbot");
-        config.SetApplicationVersion("0.1.0-dev");
+        config.SetApplicationVersion(
+            Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? "0.0.0-dev");
 
         config.AddCommand<RunCommand>("run")
             .WithDescription("Run the bot (default when no command given).");
