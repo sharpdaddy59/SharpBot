@@ -45,6 +45,41 @@ public sealed class LlmOptions
     /// roughly 400–800 MB at 8K context for a 3B model — tune down on RAM-tight boxes.
     /// </summary>
     public int MaxActiveConversations { get; set; } = 4;
+
+    // --- Sampling parameters --------------------------------------------------------------
+    // These defaults are tuned against real-world use (ported from the Questora engine which
+    // drives much smaller models reliably). The three repetition/frequency/presence penalties
+    // are critical for small models (Gemma 1B, Phi-3) — without them the model gets stuck
+    // emitting the same tool call or text over and over.
+
+    /// <summary>Softmax temperature. Higher = more random. 0.7–0.8 is typical for chat.</summary>
+    public float Temperature { get; set; } = 0.75f;
+
+    /// <summary>Nucleus sampling cutoff. Keep the smallest set of tokens with cumulative probability above this.</summary>
+    public float TopP { get; set; } = 0.92f;
+
+    /// <summary>Top-k sampling cutoff. Only the K most likely tokens are considered.</summary>
+    public int TopK { get; set; } = 40;
+
+    /// <summary>Penalty applied to tokens that have recently appeared. Values above 1.0 discourage repetition; 1.1 is a gentle default.</summary>
+    public float RepeatPenalty { get; set; } = 1.1f;
+
+    /// <summary>Scales down tokens proportional to how often they appeared. Combats loops.</summary>
+    public float FrequencyPenalty { get; set; } = 0.3f;
+
+    /// <summary>Scales down tokens that have appeared at all. Encourages topic diversity.</summary>
+    public float PresencePenalty { get; set; } = 0.2f;
+
+    /// <summary>Max tokens to generate per turn.</summary>
+    public int MaxTokens { get; set; } = 1024;
+
+    /// <summary>
+    /// Do a brief warmup inference (2 × MaxTokens=1) the first time each conversation's
+    /// executor starts. Some models — notably Gemma — produce empty output on their first
+    /// one or two real inferences without this priming. Adds ~200 ms to the first turn of
+    /// each new conversation; disable if you're sure your model doesn't need it.
+    /// </summary>
+    public bool WarmupOnFirstTurn { get; set; } = true;
 }
 
 public sealed class TelegramOptions

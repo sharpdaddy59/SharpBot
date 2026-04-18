@@ -146,16 +146,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
                 return new LlmResponse(string.Empty, Array.Empty<ToolCall>());
             }
 
-            var inferenceParams = new InferenceParams
-            {
-                MaxTokens = 1024,
-                AntiPrompts = CommonAntiPrompts,
-                SamplingPipeline = new DefaultSamplingPipeline
-                {
-                    Temperature = 0.7f,
-                    TopP = 0.95f,
-                },
-            };
+            var inferenceParams = BuildInferenceParams();
 
             var sb = new StringBuilder();
             await foreach (var chunk in state.Executor!.InferAsync(delta, inferenceParams, cancellationToken).ConfigureAwait(false))
@@ -202,8 +193,69 @@ public sealed partial class LlamaSharpClient : ILlmClient
         _states[conversationId] = state;
         _logger.LogInformation("Conversation {Id}: created new KV cache ({Active} active).",
             conversationId, _states.Count);
+
+        if (_options.WarmupOnFirstTurn)
+        {
+            WarmupExecutor(state, conversationId);
+        }
+
         return state;
     }
+
+    /// <summary>
+    /// Some models (notably Gemma) produce empty output on their first one or two inferences
+    /// against a fresh executor. A brief warmup with MaxTokens=1 primes whatever internal
+    /// state they're missing. Adds ~100–300 ms to the first turn of each new conversation;
+    /// worth it to avoid a silent no-op first response.
+    /// </summary>
+    private void WarmupExecutor(ConversationState state, string conversationId)
+    {
+        try
+        {
+            var warmupParams = new InferenceParams
+            {
+                MaxTokens = 1,
+                AntiPrompts = CommonAntiPrompts,
+            };
+            // Simple text; the executor will render it under the model's chat template during
+            // the real first call anyway. We just need to bump its internal state.
+            for (var i = 0; i < 2; i++)
+            {
+                var consumer = state.Executor!.InferAsync("hi", warmupParams).GetAsyncEnumerator();
+                try
+                {
+                    while (consumer.MoveNextAsync().AsTask().GetAwaiter().GetResult()) { /* drain */ }
+                }
+                finally
+                {
+                    consumer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+            }
+            // The warmup dirtied the KV cache with "hi"; reset so the real first inference
+            // gets a clean prefill and our ProcessedText tracking starts from zero.
+            state.Reset(_weights!, _modelParams!);
+            _logger.LogDebug("Conversation {Id}: warmed up executor.", conversationId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Conversation {Id}: warmup failed; continuing anyway.", conversationId);
+        }
+    }
+
+    private InferenceParams BuildInferenceParams() => new()
+    {
+        MaxTokens = _options.MaxTokens,
+        AntiPrompts = CommonAntiPrompts,
+        SamplingPipeline = new DefaultSamplingPipeline
+        {
+            Temperature = _options.Temperature,
+            TopP = _options.TopP,
+            TopK = _options.TopK,
+            RepeatPenalty = _options.RepeatPenalty,
+            FrequencyPenalty = _options.FrequencyPenalty,
+            PresencePenalty = _options.PresencePenalty,
+        },
+    };
 
     /// <summary>
     /// Tries to make <paramref name="processed"/> align with <paramref name="fullPrompt"/> by
