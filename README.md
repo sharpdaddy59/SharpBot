@@ -28,15 +28,16 @@ On first run, `setup` walks you through model selection and downloads a GGUF to 
 | Command | What it does |
 | --- | --- |
 | `sharpbot run` | Start the bot (default when no command given). |
+| `sharpbot chat` | Local chat REPL — talk to the model from the console, with tool use. `--no-tools` disables tool calling. |
 | `sharpbot setup` | Interactive first-run wizard. |
 | `sharpbot models list` | Show curated + installed GGUF models. |
 | `sharpbot models download [name]` | Download a model; prompts interactively if no name. |
-| `sharpbot hf login` | Save a HuggingFace token (needed for gated models — see below). |
-| `sharpbot hf logout` | Remove the saved token. |
-| `sharpbot hf status` | Show whether a token is saved. |
+| `sharpbot hf login` / `logout` / `status` | Manage HuggingFace token (needed for gated models — see below). |
+| `sharpbot tg login` / `logout` / `status` | Manage the Telegram bot token. |
 | `sharpbot pair` | Pair a Telegram user — first message to the bot wins. |
-| `sharpbot mcp list` | List configured MCP servers and discovered tools. |
-| `sharpbot mcp test server.tool '{"arg":"value"}'` | Invoke a single MCP tool directly (debug). |
+| `sharpbot tools list` | List every tool available to the LLM (built-in + MCP), marked by source. |
+| `sharpbot tools test name '{"arg":"value"}'` | Invoke any tool directly (debug). |
+| `sharpbot mcp list` / `test` | MCP-specific variants for debugging server connectivity. |
 | `sharpbot doctor` | Sanity-check config, model file, tokens, MCP servers. |
 
 ## Tools
