@@ -74,6 +74,17 @@ try
                 .WithDescription("Show whether a token is saved.");
         });
 
+        config.AddBranch("tg", tg =>
+        {
+            tg.SetDescription("Manage the Telegram bot token.");
+            tg.AddCommand<TgLoginCommand>("login")
+                .WithDescription("Save a Telegram bot token from @BotFather.");
+            tg.AddCommand<TgLogoutCommand>("logout")
+                .WithDescription("Remove the saved Telegram bot token.");
+            tg.AddCommand<TgStatusCommand>("status")
+                .WithDescription("Show whether a Telegram token is saved and which users are paired.");
+        });
+
         config.AddCommand<PairCommand>("pair")
             .WithDescription("Pair a Telegram user — first message to the bot wins.");
 
