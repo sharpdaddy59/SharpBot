@@ -24,12 +24,15 @@ public static class ServiceCollectionExtensions
             c.DefaultRequestHeaders.UserAgent.ParseAdd("SharpBot/0.2 (+https://github.com/sharpdaddy59/SharpBot)");
         });
 
-        // HttpClient for built-in tools (shorter timeout, no auth)
+        // HttpClient per tool that needs outbound HTTP — each gets its own name so we can tune timeouts
+        // per tool later if needed.
         services.AddHttpClient<FetchUrlTool>();
+        services.AddHttpClient<WeatherTool>(c => c.Timeout = TimeSpan.FromSeconds(15));
 
         // Built-in tools: each IBuiltInTool instance is discovered by BuiltInToolHost via DI.
         services.AddSingleton<IBuiltInTool, CurrentTimeTool>();
         services.AddSingleton<IBuiltInTool>(sp => sp.GetRequiredService<FetchUrlTool>());
+        services.AddSingleton<IBuiltInTool>(sp => sp.GetRequiredService<WeatherTool>());
         services.AddSingleton<IBuiltInTool, ReadFileTool>();
         services.AddSingleton<IBuiltInTool, ListFilesTool>();
 
