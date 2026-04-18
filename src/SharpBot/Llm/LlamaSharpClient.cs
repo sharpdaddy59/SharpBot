@@ -367,15 +367,36 @@ public sealed partial class LlamaSharpClient : ILlmClient
     }
 
     /// <summary>
-    /// Pull Qwen-style &lt;tool_call&gt; blocks out of the raw model output. Returns the remaining
-    /// user-facing text (with those blocks removed) and the list of parsed calls.
+    /// Pull tool-call blocks out of the raw model output. Qwen 2.5's native format is
+    /// <![CDATA[<tool_call>...</tool_call>]]>; other models (Gemma, Llama) often improvise with a
+    /// markdown JSON code fence instead. We recognize both. Returns the remaining user-facing
+    /// text (with those blocks removed) and the list of parsed calls.
     /// </summary>
     internal static (string Text, IReadOnlyList<ToolCall> Calls) ExtractToolCalls(string raw)
     {
-        var matches = ToolCallRegex().Matches(raw);
-        if (matches.Count == 0) return (raw, Array.Empty<ToolCall>());
-
         var calls = new List<ToolCall>();
+        var cleaned = raw;
+
+        // Primary: Qwen's native <tool_call>...</tool_call> format.
+        cleaned = ExtractWith(cleaned, ToolCallRegex(), calls, requireShape: false);
+
+        // Fallback: ```json { ... } ``` fenced blocks whose JSON happens to carry the expected
+        // tool-call shape (name + arguments). Shape-checked so we don't strip random JSON
+        // examples the model might include in its response.
+        cleaned = ExtractWith(cleaned, FencedJsonRegex(), calls, requireShape: true);
+
+        return (cleaned.Trim(), calls);
+    }
+
+    private static string ExtractWith(string input, Regex pattern, List<ToolCall> calls, bool requireShape)
+    {
+        var matches = pattern.Matches(input);
+        if (matches.Count == 0) return input;
+
+        // Only strip blocks from the returned text when they actually produced a tool call —
+        // otherwise ordinary JSON examples would get ripped out of the model's prose.
+        var toStrip = new List<Match>();
+
         foreach (Match m in matches)
         {
             var json = m.Groups[1].Value.Trim();
@@ -383,9 +404,14 @@ public sealed partial class LlamaSharpClient : ILlmClient
             {
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) continue;
                 if (!root.TryGetProperty("name", out var nameEl)) continue;
                 var name = nameEl.GetString();
                 if (string.IsNullOrWhiteSpace(name)) continue;
+
+                // For the fenced-block fallback, require the shape to include an 'arguments'
+                // key so we don't accidentally strip ordinary JSON examples the model shares.
+                if (requireShape && !root.TryGetProperty("arguments", out _)) continue;
 
                 var argsJson = "{}";
                 if (root.TryGetProperty("arguments", out var argsEl))
@@ -400,6 +426,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
 
                 var id = "call_" + Guid.NewGuid().ToString("N")[..8];
                 calls.Add(new ToolCall(id, name!, argsJson));
+                toStrip.Add(m);
             }
             catch (JsonException)
             {
@@ -407,12 +434,22 @@ public sealed partial class LlamaSharpClient : ILlmClient
             }
         }
 
-        var cleaned = ToolCallRegex().Replace(raw, string.Empty).Trim();
-        return (cleaned, calls);
+        if (toStrip.Count == 0) return input;
+
+        // Strip accepted matches back-to-front so earlier indices stay valid.
+        var sb = new StringBuilder(input);
+        foreach (var m in toStrip.OrderByDescending(x => x.Index))
+        {
+            sb.Remove(m.Index, m.Length);
+        }
+        return sb.ToString();
     }
 
     [GeneratedRegex(@"<tool_call>\s*(\{.*?\})\s*</tool_call>", RegexOptions.Singleline)]
     private static partial Regex ToolCallRegex();
+
+    [GeneratedRegex(@"```(?:json)?\s*(\{[\s\S]*?\})\s*```", RegexOptions.IgnoreCase)]
+    private static partial Regex FencedJsonRegex();
 
     public ValueTask DisposeAsync()
     {

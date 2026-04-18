@@ -47,6 +47,18 @@ SharpBot exposes tools to the LLM from two sources, aggregated into one flat cat
 1. **Built-in tools** (C#, in-process, zero dependencies) — shipped with every binary. Use `sharpbot tools list` to see them.
 2. **MCP tools** (optional, external processes) — plug in any [Model Context Protocol](https://modelcontextprotocol.io) server for extra capabilities.
 
+### Model compatibility for tool use
+
+All tools work with any model via direct CLI (`sharpbot tools test ...`). When the **LLM** calls tools on your behalf during chat, model choice matters:
+
+| Model | Tool calling |
+| --- | --- |
+| **Qwen 2.5 (3B, 7B)** | **Recommended.** Qwen is natively trained on the `<tool_call>` format SharpBot uses; tool calls are reliable and well-formed. |
+| Gemma 3 | Best-effort. Gemma improvises with markdown ` ```json {...} ``` ` blocks; SharpBot parses these as a fallback. Works, but Gemma often chooses not to call tools, or calls the wrong one. Use Gemma 3 **4B+**; the 1B is too small for reliable tool selection. |
+| Llama 3.2 | Best-effort, less reliable than Gemma. Often emits partial/malformed tool calls. Fine for plain chat without tool use. |
+
+TL;DR — keep Qwen 2.5 3B as your default if you want the bot to actually use its tools.
+
 ### Built-in tools (always available)
 
 | Name | Purpose |

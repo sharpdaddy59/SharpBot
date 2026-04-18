@@ -117,6 +117,80 @@ public class ExtractToolCallsTests
     }
 
     [Fact]
+    public void Parses_markdown_json_fenced_block_as_tool_call()
+    {
+        // Gemma / Llama often improvise with a ```json block when asked to call a tool.
+        const string raw = """
+            Sure, let me calculate that.
+
+            ```json
+            {"name": "core.calculator", "arguments": {"expression": "17 * 2348 / 100"}}
+            ```
+            """;
+
+        var (text, calls) = LlamaSharpClient.ExtractToolCalls(raw);
+
+        Assert.Single(calls);
+        Assert.Equal("core.calculator", calls[0].Name);
+        Assert.Contains("2348", calls[0].ArgumentsJson);
+        Assert.DoesNotContain("```", text);
+        Assert.DoesNotContain("core.calculator", text);
+        Assert.Contains("calculate", text);
+    }
+
+    [Fact]
+    public void Accepts_fenced_block_without_json_language_hint()
+    {
+        const string raw = """
+            ```
+            {"name":"core.weather","arguments":{"location":"Paris"}}
+            ```
+            """;
+
+        var (_, calls) = LlamaSharpClient.ExtractToolCalls(raw);
+
+        Assert.Single(calls);
+        Assert.Equal("core.weather", calls[0].Name);
+    }
+
+    [Fact]
+    public void Does_not_match_fenced_json_without_name_and_arguments_shape()
+    {
+        // An ordinary JSON example the model includes shouldn't get ripped out.
+        const string raw = """
+            Here's an example config:
+
+            ```json
+            {"favorite": "blue", "count": 3}
+            ```
+            """;
+
+        var (text, calls) = LlamaSharpClient.ExtractToolCalls(raw);
+
+        Assert.Empty(calls);
+        Assert.Contains("favorite", text);
+    }
+
+    [Fact]
+    public void Prefers_native_tool_call_over_fenced_block()
+    {
+        // If both show up (unlikely but possible), both should be parsed.
+        const string raw = """
+            <tool_call>{"name":"core.current_time","arguments":{}}</tool_call>
+
+            ```json
+            {"name":"core.weather","arguments":{"location":"Tokyo"}}
+            ```
+            """;
+
+        var (_, calls) = LlamaSharpClient.ExtractToolCalls(raw);
+
+        Assert.Equal(2, calls.Count);
+        Assert.Contains(calls, c => c.Name == "core.current_time");
+        Assert.Contains(calls, c => c.Name == "core.weather");
+    }
+
+    [Fact]
     public void Generates_distinct_ids_per_call()
     {
         const string raw = """
