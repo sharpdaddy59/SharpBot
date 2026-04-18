@@ -78,9 +78,18 @@ try
                 .WithDescription("Show whether a token is saved.");
         });
 
+        config.AddBranch("tools", tools =>
+        {
+            tools.SetDescription("List and debug all tools (built-in + MCP) available to the LLM.");
+            tools.AddCommand<ToolsListCommand>("list")
+                .WithDescription("List all tools from every host (built-in + MCP), marking their source.");
+            tools.AddCommand<ToolsTestCommand>("test")
+                .WithDescription("Invoke any tool by qualified name with JSON args.");
+        });
+
         config.AddBranch("mcp", mcp =>
         {
-            mcp.SetDescription("Manage and debug MCP (Model Context Protocol) tool servers.");
+            mcp.SetDescription("MCP-specific diagnostics (server connectivity, per-server tool listings).");
             mcp.AddCommand<McpListCommand>("list")
                 .WithDescription("List configured MCP servers and their tools.");
             mcp.AddCommand<McpTestCommand>("test")

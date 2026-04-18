@@ -39,9 +39,25 @@ On first run, `setup` walks you through model selection and downloads a GGUF to 
 | `sharpbot mcp test server.tool '{"arg":"value"}'` | Invoke a single MCP tool directly (debug). |
 | `sharpbot doctor` | Sanity-check config, model file, tokens, MCP servers. |
 
-## MCP tool servers
+## Tools
 
-SharpBot acts as a client to any [Model Context Protocol](https://modelcontextprotocol.io) server, giving the LLM access to tools like filesystem access, web fetch, Telegram messaging, calendar, etc.
+SharpBot exposes tools to the LLM from two sources, aggregated into one flat catalog:
+
+1. **Built-in tools** (C#, in-process, zero dependencies) — shipped with every binary. Use `sharpbot tools list` to see them.
+2. **MCP tools** (optional, external processes) — plug in any [Model Context Protocol](https://modelcontextprotocol.io) server for extra capabilities.
+
+### Built-in tools (always available)
+
+| Name | Purpose |
+| --- | --- |
+| `core.current_time` | Get the current date/time, optionally in a specific IANA timezone. |
+| `core.fetch_url` | GET any http/https URL, returns response body as text. |
+| `core.read_file` | Read a text file inside the workspace directory. |
+| `core.list_files` | List files/subdirs inside the workspace directory. |
+
+File-system tools are sandboxed to `SharpBot:BuiltInTools:WorkspaceDirectory` (default `./workspace`) — paths escaping that root are rejected. Tune these (fetch size cap, fetch timeout, workspace path) in `appsettings.json`.
+
+### MCP tool servers (optional)
 
 Configure servers under `SharpBot:Mcp:Servers` in `appsettings.json` or `data/user-config.json`:
 
@@ -74,7 +90,13 @@ sharpbot mcp list           # spawn configured servers, list their tools
 sharpbot mcp test fs.read_file '{"path":"./workspace/README.md"}'
 ```
 
-Note: MCP servers themselves have their own runtime requirements. Most official ones are Node packages (`npx -y @modelcontextprotocol/server-*`) and require Node.js installed. Python servers use `uvx`. SharpBot stays zero-dependency — *you* choose which tool runtimes to install based on which servers you want.
+**Runtime requirements:** MCP is **optional**. SharpBot itself stays zero-dependency — the built-in tools above cover the common cases with no extra runtime. MCP servers are only needed if you want to go beyond that, and they have their own runtime requirements:
+
+- Most official servers are Node packages (`npx -y @modelcontextprotocol/server-*`) → need Node.js installed.
+- Python servers use `uvx` → need Python + uv installed.
+- Some community servers ship as Go/Rust binaries → no runtime needed.
+
+You install a runtime only for the servers you choose to use.
 
 ## Gated models (Gemma, Llama, etc.)
 

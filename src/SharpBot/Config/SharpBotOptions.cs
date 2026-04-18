@@ -8,6 +8,19 @@ public sealed class SharpBotOptions
     public LlmOptions Llm { get; set; } = new();
     public TelegramOptions Telegram { get; set; } = new();
     public McpOptions Mcp { get; set; } = new();
+    public BuiltInToolsOptions BuiltInTools { get; set; } = new();
+}
+
+public sealed class BuiltInToolsOptions
+{
+    /// <summary>Path used as the sandbox root for file-system built-ins (read_file, list_files).</summary>
+    public string WorkspaceDirectory { get; set; } = "workspace";
+
+    /// <summary>Max bytes of response body the fetch_url tool will return. Responses beyond are truncated.</summary>
+    public int FetchMaxBytes { get; set; } = 100_000;
+
+    /// <summary>Timeout in seconds for the fetch_url tool.</summary>
+    public int FetchTimeoutSeconds { get; set; } = 20;
 }
 
 public sealed class LlmOptions
