@@ -30,13 +30,7 @@ public sealed class LlmOptions
 {
     public string ModelPath { get; set; } = "";
     public int ContextSize { get; set; } = 8192;
-
-    /// <summary>
-    /// Number of transformer layers to offload to GPU. 99 = "all of them" (llama.cpp clamps
-    /// to the actual layer count). Has no effect unless the build was produced with a GPU
-    /// backend (IncludeCuda=true etc.) — CPU-only builds silently ignore it.
-    /// </summary>
-    public int GpuLayerCount { get; set; } = 99;
+    public int GpuLayerCount { get; set; }
     public string SystemPrompt { get; set; } = "";
 
     /// <summary>

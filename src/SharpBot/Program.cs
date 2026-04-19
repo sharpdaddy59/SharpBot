@@ -35,22 +35,6 @@ try
             rollingInterval: RollingInterval.Day)
         .CreateLogger();
 
-#if CUDA_ENABLED
-    // Tell LlamaSharp to use the CUDA backend. The Backend.Cuda12 package ships the native
-    // libs next to the binary; WithCuda() wires them in. If the host has no NVIDIA driver
-    // the call returns gracefully and we fall back to CPU automatically.
-    try
-    {
-        NativeLibraryConfig.All.WithCuda();
-        Log.Information("CUDA backend enabled (compiled with -p:IncludeCuda=true). GpuLayerCount={Count}",
-            configuration.GetValue<int>("SharpBot:Llm:GpuLayerCount", 99));
-    }
-    catch (Exception ex)
-    {
-        Log.Warning(ex, "Failed to enable CUDA backend; falling back to CPU.");
-    }
-#endif
-
     // Route llama.cpp's native stderr spam through Serilog so it obeys our log level config.
     // Info/Debug are dropped unless SharpBot:Llm:VerboseNativeLogs=true — keeps startup readable.
     var verboseNativeLogs = configuration.GetValue<bool>("SharpBot:Llm:VerboseNativeLogs");
