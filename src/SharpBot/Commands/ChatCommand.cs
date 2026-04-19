@@ -30,7 +30,8 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellationToken)
     {
         AnsiConsole.Write(new Rule("[bold green]SharpBot chat[/]").LeftJustified());
-        AnsiConsole.MarkupLine($"Model: [grey]{_options.Llm.ModelPath}[/]");
+        AnsiConsole.MarkupLine($"Model:   [grey]{Markup.Escape(_options.Llm.ModelPath)}[/]");
+        AnsiConsole.MarkupLine($"Context: [grey]{_options.Llm.ContextSize} tokens[/]");
         AnsiConsole.MarkupLine("Type a message and press Enter. Empty line or Ctrl+C to exit.");
         AnsiConsole.WriteLine();
 
@@ -90,6 +91,7 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
             for (var iteration = 0; iteration < maxToolIterations && !finished; iteration++)
             {
                 LlmResponse response;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     response = await AnsiConsole.Status()
@@ -97,6 +99,8 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
                         .StartAsync(iteration == 0 ? "thinking..." : $"thinking (iteration {iteration + 1})...", async _ =>
                             await _llm.InferAsync(conversationId, convo, toolsForLlm, cancellationToken).ConfigureAwait(false))
                         .ConfigureAwait(false);
+                    sw.Stop();
+                    AnsiConsole.MarkupLine($"[grey]  ({sw.Elapsed.TotalSeconds:F1}s)[/]");
                 }
                 catch (OperationCanceledException) { return 0; }
                 catch (Exception ex)
