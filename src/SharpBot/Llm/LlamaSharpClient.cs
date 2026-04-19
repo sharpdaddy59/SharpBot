@@ -428,20 +428,42 @@ public sealed partial class LlamaSharpClient : ILlmClient
     {
         var calls = new List<ToolCall>();
         var cleaned = raw;
+        var malformedToolCalls = 0;
 
-        // Primary: Qwen's native <tool_call>...</tool_call> format.
-        cleaned = ExtractWith(cleaned, ToolCallRegex(), calls, requireShape: false);
+        // Primary: Qwen's native <tool_call>...</tool_call> format. Tags always get stripped
+        // — a tag-wrapped block is unambiguously intended as a tool call, so even if the JSON
+        // inside is malformed we remove it rather than leak the raw tags to the user.
+        cleaned = ExtractWith(cleaned, ToolCallRegex(), calls,
+            requireShape: false, stripOnFailure: true, failureCount: out var nativeFailures);
+        malformedToolCalls += nativeFailures;
 
         // Fallback: ```json { ... } ``` fenced blocks whose JSON happens to carry the expected
         // tool-call shape (name + arguments). Shape-checked so we don't strip random JSON
-        // examples the model might include in its response.
-        cleaned = ExtractWith(cleaned, FencedJsonRegex(), calls, requireShape: true);
+        // examples the model might include in its response. Not stripped on failure.
+        cleaned = ExtractWith(cleaned, FencedJsonRegex(), calls,
+            requireShape: true, stripOnFailure: false, failureCount: out _);
 
-        return (cleaned.Trim(), calls);
+        cleaned = cleaned.Trim();
+        if (malformedToolCalls > 0 && calls.Count == 0)
+        {
+            // The model clearly tried to call a tool but fumbled the JSON. Surface something
+            // meaningful rather than an empty response.
+            cleaned = $"(The model tried to call a tool but produced invalid JSON. " +
+                      $"This sometimes happens with aggressive sampling penalties — try lowering " +
+                      $"RepeatPenalty in data/user-config.json.)\n\n{cleaned}".TrimEnd();
+        }
+        return (cleaned, calls);
     }
 
-    private static string ExtractWith(string input, Regex pattern, List<ToolCall> calls, bool requireShape)
+    private static string ExtractWith(
+        string input,
+        Regex pattern,
+        List<ToolCall> calls,
+        bool requireShape,
+        bool stripOnFailure,
+        out int failureCount)
     {
+        failureCount = 0;
         var matches = pattern.Matches(input);
         if (matches.Count == 0) return input;
 
@@ -452,6 +474,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
         foreach (Match m in matches)
         {
             var json = m.Groups[1].Value.Trim();
+            var parsedOk = false;
             try
             {
                 using var doc = JsonDocument.Parse(json);
@@ -479,10 +502,20 @@ public sealed partial class LlamaSharpClient : ILlmClient
                 var id = "call_" + Guid.NewGuid().ToString("N")[..8];
                 calls.Add(new ToolCall(id, name!, argsJson));
                 toStrip.Add(m);
+                parsedOk = true;
             }
             catch (JsonException)
             {
-                // Skip malformed — the model will learn from absence of a tool result.
+                // Malformed JSON — the model tried but fumbled it.
+            }
+
+            if (!parsedOk)
+            {
+                failureCount++;
+                // For wrappers that unambiguously indicate "I'm calling a tool" (native tool_call
+                // tags), remove the block even on parse failure so the raw tag/JSON doesn't leak
+                // to the user as the bot's reply.
+                if (stripOnFailure) toStrip.Add(m);
             }
         }
 

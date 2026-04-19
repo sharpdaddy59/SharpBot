@@ -61,14 +61,21 @@ public sealed class LlmOptions
     /// <summary>Top-k sampling cutoff. Only the K most likely tokens are considered.</summary>
     public int TopK { get; set; } = 40;
 
-    /// <summary>Penalty applied to tokens that have recently appeared. Values above 1.0 discourage repetition; 1.1 is a gentle default.</summary>
+    /// <summary>Penalty applied to tokens that have recently appeared. Values above 1.0 discourage repetition; 1.1 is a gentle default that prevents loops without breaking structured output.</summary>
     public float RepeatPenalty { get; set; } = 1.1f;
 
-    /// <summary>Scales down tokens proportional to how often they appeared. Combats loops.</summary>
-    public float FrequencyPenalty { get; set; } = 0.3f;
+    /// <summary>
+    /// Scales down tokens proportional to how often they appeared. Combats loops in creative text,
+    /// but penalizes characters like '"' which recur in structured JSON tool calls — default 0 so
+    /// tool calls stay well-formed. Bump to 0.3–0.5 for creative chat without tool use.
+    /// </summary>
+    public float FrequencyPenalty { get; set; }
 
-    /// <summary>Scales down tokens that have appeared at all. Encourages topic diversity.</summary>
-    public float PresencePenalty { get; set; } = 0.2f;
+    /// <summary>
+    /// Scales down tokens that have appeared at all. Encourages topic diversity in creative text,
+    /// but breaks structured output for the same reason as FrequencyPenalty. Default 0.
+    /// </summary>
+    public float PresencePenalty { get; set; }
 
     /// <summary>Max tokens to generate per turn.</summary>
     public int MaxTokens { get; set; } = 1024;
