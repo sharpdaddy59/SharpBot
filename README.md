@@ -152,6 +152,26 @@ data/                       — gitignored; secrets, logs, user config
 models/                     — gitignored; GGUF files
 ```
 
+## GPU acceleration (optional)
+
+SharpBot's default build is CPU-only — small binary, runs anywhere, good enough for cheap mini-PC hardware. On a machine with an NVIDIA GPU (RTX-class) a CUDA build is dramatically faster — expect 10–50× speedup for inference.
+
+**Build with CUDA support:**
+
+```bash
+dotnet build src/SharpBot -p:IncludeCuda=true -c Release
+dotnet run  --project src/SharpBot -p:IncludeCuda=true -- chat
+```
+
+Or publish a standalone CUDA binary:
+```bash
+dotnet publish src/SharpBot -p:IncludeCuda=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
+```
+
+The CUDA build adds ~100 MB of native libraries to the binary. All layers auto-offload to GPU (`GpuLayerCount = 99` default). Requires NVIDIA drivers on the host — on a system without drivers the code gracefully falls back to CPU and logs a warning.
+
+**Other backends** (not bundled by default; see `LLamaSharp.Backend.*` on NuGet if you want to hack them in): Vulkan (Intel Arc / AMD / NVIDIA), Metal (Apple Silicon). Contributions welcome.
+
 ## Requirements
 
 - .NET 10 SDK ([download](https://dotnet.microsoft.com/download))
