@@ -343,7 +343,21 @@ public sealed partial class LlamaSharpClient : ILlmClient
     /// extended string as a proper prefix of <paramref name="fullPrompt"/>. Used to recover the
     /// EOT token that LlamaSharp's InteractiveExecutor consumes silently on stop.
     /// </summary>
-    private static bool TryAlignWithAntiPrompt(
+    /// <remarks>
+    /// Models routinely emit trailing whitespace (typically a single '\n') BEFORE the EOT
+    /// token. That whitespace ends up in <paramref name="processed"/> via sb.ToString(), but
+    /// the chat template's re-rendering of the same conversation places message content
+    /// directly against the EOT marker with no separating whitespace. A literal alignment
+    /// therefore fails purely on the misplaced '\n' — the EOT lands one character offset
+    /// from where the candidate puts it.
+    ///
+    /// We retry alignment with a TrimEnd'd processed string. If that aligns, we accept it
+    /// as the effective cache prefix. The actual KV cache still holds the model-emitted
+    /// whitespace token(s) before the EOT — minor context noise that doesn't materially
+    /// affect downstream generation, and far preferable to a full ~100-second prefill miss
+    /// on every multi-turn boundary.
+    /// </remarks>
+    internal static bool TryAlignWithAntiPrompt(
         string processed,
         string fullPrompt,
         out string extended,
@@ -359,6 +373,22 @@ public sealed partial class LlamaSharpClient : ILlmClient
                 return true;
             }
         }
+
+        var trimmed = processed.TrimEnd();
+        if (trimmed.Length < processed.Length)
+        {
+            foreach (var stop in CommonAntiPrompts)
+            {
+                var candidate = trimmed + stop;
+                if (fullPrompt.StartsWith(candidate, StringComparison.Ordinal))
+                {
+                    extended = candidate;
+                    matchedStop = stop;
+                    return true;
+                }
+            }
+        }
+
         extended = processed;
         matchedStop = string.Empty;
         return false;
