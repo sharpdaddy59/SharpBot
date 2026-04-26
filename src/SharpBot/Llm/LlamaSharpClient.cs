@@ -149,8 +149,8 @@ public sealed partial class LlamaSharpClient : ILlmClient
                 if (state.ProcessedText.Length > 0)
                 {
                     _logger.LogInformation(
-                        "Conversation {Id}: KV-cache miss — resetting and doing a full prefill.",
-                        conversationId);
+                        "Conversation {Id}: KV-cache miss — {Reason}",
+                        conversationId, DescribeCacheMiss(state.ProcessedText, fullPrompt));
                 }
                 state.Reset(_weights!, _modelParams!);
                 delta = fullPrompt;
@@ -288,6 +288,54 @@ public sealed partial class LlamaSharpClient : ILlmClient
             PresencePenalty = _options.PresencePenalty,
         },
     };
+
+    /// <summary>
+    /// Builds a focused diagnostic for the KV-cache miss path. Identifies the exact byte
+    /// offset where <paramref name="processed"/> and <paramref name="fullPrompt"/> diverge
+    /// and emits a windowed snippet on each side, so an operator can tell at a glance
+    /// whether the divergence is (a) a missing anti-prompt token (mostly tail-only diff),
+    /// (b) tool-catalog reordering (early divergence inside the system message), or
+    /// (c) a non-deterministic chat-template render. Keeps the snippet bounded so log lines
+    /// stay readable.
+    /// </summary>
+    internal static string DescribeCacheMiss(string processed, string fullPrompt)
+    {
+        var minLen = Math.Min(processed.Length, fullPrompt.Length);
+        var divergeAt = -1;
+        for (var i = 0; i < minLen; i++)
+        {
+            if (processed[i] != fullPrompt[i])
+            {
+                divergeAt = i;
+                break;
+            }
+        }
+
+        if (divergeAt < 0)
+        {
+            // Common prefix matches up to minLen — strings only differ in length.
+            // Reaching the miss branch in this case means processed.Length > fullPrompt.Length,
+            // i.e. the new prompt is SHORTER than what we already processed (history was edited
+            // or truncated). The earlier StartsWith check covered processed-as-prefix-of-full.
+            return $"resetting (full common prefix of {minLen} chars; " +
+                   $"processed.Length={processed.Length}, fullPrompt.Length={fullPrompt.Length})";
+        }
+
+        const int window = 60;
+        var snippetStart = Math.Max(0, divergeAt - window);
+        var processedEnd = Math.Min(processed.Length, divergeAt + window);
+        var fullPromptEnd = Math.Min(fullPrompt.Length, divergeAt + window);
+
+        var processedSnippet = Escape(processed[snippetStart..processedEnd]);
+        var fullPromptSnippet = Escape(fullPrompt[snippetStart..fullPromptEnd]);
+
+        return $"diverged at byte {divergeAt} (processed.Length={processed.Length}, " +
+               $"fullPrompt.Length={fullPrompt.Length}). " +
+               $"Processed: \"...{processedSnippet}...\" | FullPrompt: \"...{fullPromptSnippet}...\"";
+
+        static string Escape(string s) =>
+            s.Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+    }
 
     /// <summary>
     /// Tries to make <paramref name="processed"/> align with <paramref name="fullPrompt"/> by
