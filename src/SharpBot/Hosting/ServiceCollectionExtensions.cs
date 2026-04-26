@@ -58,6 +58,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ConfigWriter>();
         services.AddSingleton<ISecretStore, FileSecretStore>();
         services.AddSingleton<IConversationStore, InMemoryConversationStore>();
+        services.AddSingleton<IIntentRouter, RegexIntentRouter>();
         services.AddSingleton<ILlmClient, LlamaSharpClient>();
         services.AddSingleton<IChatTransport, TelegramTransport>();
         services.AddSingleton<AgentLoop>();

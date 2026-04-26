@@ -13,6 +13,7 @@ public sealed class AgentLoop
     private readonly ILlmClient _llm;
     private readonly IToolHost _tools;
     private readonly IConversationStore _store;
+    private readonly IIntentRouter _intentRouter;
     private readonly SharpBotOptions _options;
     private readonly ILogger<AgentLoop> _logger;
 
@@ -21,6 +22,7 @@ public sealed class AgentLoop
         ILlmClient llm,
         IToolHost tools,
         IConversationStore store,
+        IIntentRouter intentRouter,
         IOptions<SharpBotOptions> options,
         ILogger<AgentLoop> logger)
     {
@@ -28,6 +30,7 @@ public sealed class AgentLoop
         _llm = llm;
         _tools = tools;
         _store = store;
+        _intentRouter = intentRouter;
         _options = options.Value;
         _logger = logger;
     }
@@ -65,6 +68,29 @@ public sealed class AgentLoop
             convo.Append(new ChatMessage(ChatRole.System, _options.Llm.SystemPrompt));
         }
         convo.Append(new ChatMessage(ChatRole.User, incoming.Text));
+
+        // Fast path: if the deterministic router recognizes the utterance, dispatch the
+        // matched tool directly and skip the LLM entirely. The conversation history is
+        // updated as if the assistant had answered, so subsequent LLM turns still have
+        // context. On tool failure we fall through to the LLM path silently.
+        var fastCall = _intentRouter.TryMatch(incoming.Text);
+        if (fastCall is not null)
+        {
+            try
+            {
+                var toolResult = await _tools.ExecuteAsync(fastCall, cancellationToken).ConfigureAwait(false);
+                convo.Append(new ChatMessage(ChatRole.Assistant, toolResult));
+                _logger.LogDebug("{ChatId}: intent router fast-path → {Tool}", incoming.ChatId, fastCall.Name);
+                await _transport.SendAsync(incoming.ChatId, toolResult, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "{ChatId}: intent router tool {Tool} failed; falling back to LLM.",
+                    incoming.ChatId, fastCall.Name);
+            }
+        }
 
         const int maxToolIterations = 8;
         string? previousCallSignature = null;
