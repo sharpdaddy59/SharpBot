@@ -90,23 +90,47 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
             var stuckLoopDetected = false;
             for (var iteration = 0; iteration < maxToolIterations && !finished; iteration++)
             {
-                LlmResponse response;
+                LlmResponse? response = null;
                 var sw = System.Diagnostics.Stopwatch.StartNew();
+                var prefixShown = false;
+                double? ttftSec = null;
                 try
                 {
-                    response = await AnsiConsole.Status()
-                        .Spinner(Spinner.Known.Dots)
-                        .StartAsync(iteration == 0 ? "thinking..." : $"thinking (iteration {iteration + 1})...", async _ =>
-                            await _llm.InferAsync(conversationId, convo, toolsForLlm, cancellationToken).ConfigureAwait(false))
-                        .ConfigureAwait(false);
+                    await foreach (var ev in _llm
+                        .StreamInferAsync(conversationId, convo, toolsForLlm, cancellationToken)
+                        .ConfigureAwait(false))
+                    {
+                        if (ev.TextDelta is { Length: > 0 } delta)
+                        {
+                            if (!prefixShown)
+                            {
+                                AnsiConsole.Markup("[green]bot[/] > ");
+                                ttftSec = sw.Elapsed.TotalSeconds;
+                                prefixShown = true;
+                            }
+                            AnsiConsole.Write(delta);
+                        }
+                        if (ev.Final is { } f) response = f;
+                    }
                     sw.Stop();
-                    AnsiConsole.MarkupLine($"[grey]  ({sw.Elapsed.TotalSeconds:F1}s)[/]");
+                    if (prefixShown) AnsiConsole.WriteLine();
+                    AnsiConsole.MarkupLine(ttftSec.HasValue
+                        ? $"[grey]  (ttft {ttftSec.Value:F1}s, total {sw.Elapsed.TotalSeconds:F1}s)[/]"
+                        : $"[grey]  ({sw.Elapsed.TotalSeconds:F1}s)[/]");
                 }
                 catch (OperationCanceledException) { return 0; }
                 catch (Exception ex)
                 {
+                    if (prefixShown) AnsiConsole.WriteLine();
                     AnsiConsole.MarkupLine($"[red]Inference failed:[/] {Markup.Escape(ex.Message)}");
                     // Drop the unanswered user message so the next turn starts clean.
+                    convo.RemoveAt(convo.Count - 1);
+                    break;
+                }
+
+                if (response is null)
+                {
+                    AnsiConsole.MarkupLine("[yellow](no response)[/]");
                     convo.RemoveAt(convo.Count - 1);
                     break;
                 }
@@ -116,12 +140,7 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
 
                 if (!response.HasToolCalls)
                 {
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        AnsiConsole.Markup("[green]bot[/] > ");
-                        AnsiConsole.WriteLine(text);
-                        AnsiConsole.WriteLine();
-                    }
+                    AnsiConsole.WriteLine();
                     finished = true;
                     continue;
                 }

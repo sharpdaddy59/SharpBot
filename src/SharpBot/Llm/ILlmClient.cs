@@ -26,4 +26,18 @@ public interface ILlmClient : IAsyncDisposable
         IReadOnlyList<ChatMessage> conversation,
         IReadOnlyList<ToolDescriptor> availableTools,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Same contract as <see cref="InferAsync"/>, but emits text as it's generated. The terminal
+    /// event in the sequence is always a <see cref="LlmStreamEvent.Final"/> event carrying the
+    /// parsed response (clean text + extracted tool calls). Tool-call markup is buffered
+    /// internally — <see cref="LlmStreamEvent.TextDelta"/> values contain only text the user
+    /// should see. If the response is purely a tool call with no preamble, no delta events are
+    /// emitted at all; only the Final event.
+    /// </summary>
+    IAsyncEnumerable<LlmStreamEvent> StreamInferAsync(
+        string conversationId,
+        IReadOnlyList<ChatMessage> conversation,
+        IReadOnlyList<ToolDescriptor> availableTools,
+        CancellationToken cancellationToken = default);
 }

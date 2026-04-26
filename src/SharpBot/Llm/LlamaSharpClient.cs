@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -82,6 +83,21 @@ public sealed partial class LlamaSharpClient : ILlmClient
         IReadOnlyList<ToolDescriptor> availableTools,
         CancellationToken cancellationToken = default)
     {
+        LlmResponse? final = null;
+        await foreach (var ev in StreamInferAsync(conversationId, conversation, availableTools, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (ev.Final is { } f) final = f;
+        }
+        return final ?? new LlmResponse(string.Empty, Array.Empty<ToolCall>());
+    }
+
+    public async IAsyncEnumerable<LlmStreamEvent> StreamInferAsync(
+        string conversationId,
+        IReadOnlyList<ChatMessage> conversation,
+        IReadOnlyList<ToolDescriptor> availableTools,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
 
         await _inferLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -143,15 +159,31 @@ public sealed partial class LlamaSharpClient : ILlmClient
             if (delta.Length == 0)
             {
                 // Nothing new to infer. Caller fed the same conversation twice.
-                return new LlmResponse(string.Empty, Array.Empty<ToolCall>());
+                yield return LlmStreamEvent.Done(new LlmResponse(string.Empty, Array.Empty<ToolCall>()));
+                yield break;
             }
 
             var inferenceParams = BuildInferenceParams();
 
             var sb = new StringBuilder();
+            var emitter = new StreamingTextEmitter();
             await foreach (var chunk in state.Executor!.InferAsync(delta, inferenceParams, cancellationToken).ConfigureAwait(false))
             {
                 sb.Append(chunk);
+                var visible = emitter.Push(chunk);
+                if (visible is not null)
+                {
+                    yield return LlmStreamEvent.Delta(visible);
+                }
+            }
+
+            // Flush any clean prose still buffered (e.g. a sentence the model finished without
+            // a sentence-ending punctuation char). If the emitter went silent on a tool marker
+            // this is a no-op.
+            var tail = emitter.Drain();
+            if (tail is not null)
+            {
+                yield return LlmStreamEvent.Delta(tail);
             }
 
             // Record everything the executor now has in its KV cache so the next call can
@@ -162,16 +194,16 @@ public sealed partial class LlamaSharpClient : ILlmClient
 
             // Strip trailing anti-prompt tokens that may have leaked into the visible output.
             var raw = generated.Trim();
-            foreach (var stop in CommonAntiPrompts)
+            foreach (var stopAnti in CommonAntiPrompts)
             {
-                if (raw.EndsWith(stop, StringComparison.Ordinal))
+                if (raw.EndsWith(stopAnti, StringComparison.Ordinal))
                 {
-                    raw = raw[..^stop.Length].TrimEnd();
+                    raw = raw[..^stopAnti.Length].TrimEnd();
                 }
             }
 
             var (text, calls) = ExtractToolCalls(raw);
-            return new LlmResponse(text, calls);
+            yield return LlmStreamEvent.Done(new LlmResponse(text, calls));
         }
         finally
         {
