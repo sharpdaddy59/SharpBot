@@ -454,7 +454,15 @@ public sealed partial class LlamaSharpClient : ILlmClient
     /// Handles the assistant-with-tool-calls case (embed <tool_call> blocks in the assistant turn)
     /// and the tool-result case (role "tool" so the model's chat template wraps it appropriately).
     /// </summary>
-    private static IEnumerable<(string Role, string Content)> RenderMessage(ChatMessage message)
+    /// <remarks>
+    /// Empty assistant turns MUST still be rendered. The KV cache and the rendered prompt
+    /// have to agree on conversation structure — if the model produced no text on a turn,
+    /// the turn still happened from the executor's point of view, and the next call's
+    /// prompt rebuild needs to include the (empty) assistant marker so prefix matching
+    /// works. Dropping empty assistant messages permanently corrupts the KV cache for
+    /// the rest of the session.
+    /// </remarks>
+    internal static IEnumerable<(string Role, string Content)> RenderMessage(ChatMessage message)
     {
         var role = message.Role switch
         {
@@ -480,7 +488,15 @@ public sealed partial class LlamaSharpClient : ILlmClient
             yield break;
         }
 
-        if (string.IsNullOrEmpty(message.Content) && message.Role != ChatRole.Tool) yield break;
+        // Defensive skip: System and User messages with empty content are caller bugs.
+        // Tool and Assistant must render even when empty (see <remarks/> above).
+        if (string.IsNullOrEmpty(message.Content) &&
+            message.Role != ChatRole.Tool &&
+            message.Role != ChatRole.Assistant)
+        {
+            yield break;
+        }
+
         yield return (role, message.Content);
     }
 
