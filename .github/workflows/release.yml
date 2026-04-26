@@ -55,26 +55,69 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Install patchelf (Linux only)
+        if: matrix.rid == 'linux-x64'
+        run: sudo apt-get update && sudo apt-get install -y patchelf
+
       - name: Publish self-contained single-file
         shell: bash
         run: |
+          # On Linux we keep native libs OUT of the self-extract bundle so we can
+          # patchelf them in place. Without RPATH=$ORIGIN libllama.so's internal
+          # dlopen("libggml.so.0") fails — the .NET extract dir isn't on dlopen's
+          # search path and the SONAME symlinks alone don't help.
+          EXTRACT_FLAG="-p:IncludeNativeLibrariesForSelfExtract=true"
+          if [ "${{ matrix.rid }}" = "linux-x64" ]; then
+            EXTRACT_FLAG="-p:IncludeNativeLibrariesForSelfExtract=false"
+          fi
+
           dotnet publish src/SharpBot \
             -c Release \
             -r ${{ matrix.rid }} \
             --self-contained true \
             -p:PublishSingleFile=true \
-            -p:IncludeNativeLibrariesForSelfExtract=true \
+            $EXTRACT_FLAG \
             -p:DebugType=embedded \
             -p:Version=${{ steps.ver.outputs.version }} \
             -p:InformationalVersion=${{ steps.ver.outputs.version }} \
             -o publish/${{ matrix.rid }}
 
+      - name: Bake RPATH and SONAME symlinks into Linux natives
+        if: matrix.rid == 'linux-x64'
+        shell: bash
+        run: |
+          # For each native variant (avx2, avx512, noavx, ...): set RPATH to $ORIGIN
+          # so each .so finds its neighbors at the same location, and create the
+          # .so.0 SONAME symlinks the dynamic linker resolves transitive deps by.
+          cd publish/linux-x64/runtimes/linux-x64/native
+          for variant in */; do
+            (
+              cd "$variant"
+              for so in *.so; do
+                patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
+              done
+              for lib in libggml libggml-base libggml-cpu libllama libmtmd; do
+                if [ -f "$lib.so" ] && [ ! -e "$lib.so.0" ]; then
+                  ln -sf "$lib.so" "$lib.so.0"
+                fi
+              done
+            )
+          done
+          echo "--- Patched libs in $(pwd):"
+          ls -la */ | head -40
+
       - name: Stage artifact
         shell: bash
         run: |
           mkdir -p stage/sharpbot
-          cp publish/${{ matrix.rid }}/sharpbot${{ matrix.ext }} stage/sharpbot/
-          cp src/SharpBot/appsettings.json stage/sharpbot/
+          if [ "${{ matrix.rid }}" = "linux-x64" ]; then
+            # Linux: ship the whole publish tree (binary + runtimes/ tree with
+            # patched .so files and SONAME symlinks). cp -a preserves symlinks.
+            cp -a publish/${{ matrix.rid }}/. stage/sharpbot/
+          else
+            cp publish/${{ matrix.rid }}/sharpbot${{ matrix.ext }} stage/sharpbot/
+            cp src/SharpBot/appsettings.json stage/sharpbot/
+          fi
           cp LICENSE stage/sharpbot/
           cp README.md stage/sharpbot/
           if [ "${{ matrix.ext }}" != ".exe" ]; then
