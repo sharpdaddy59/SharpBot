@@ -160,11 +160,11 @@ Here's the journey of a single user turn through SharpBot's tool layer. Useful w
 
 ## Writing tool descriptions for small models
 
-This came out of reviewing a parallel project that hit a `lookup_fact` vs `search_web` confusion. The lessons apply to any small-model tool description.
+This came out of reviewing a parallel project that hit a `lookup_fact` vs `search_web` confusion, then learning the lesson again the hard way when an over-corrected first pass on SharpBot's own descriptions made the model go silent on plain greetings.
 
-- **Lead with the use case, not the function name.** "Use this when the user asks about current events" beats "Searches the web."
-- **Include exclusion wording** when two tools share verbs. "Look up a previously stored fact. Does NOT search the web or look up live data." vs "Search the web for current information. Use this for ANY question about weather, news, prices, locations."
-- **Keep them short.** One sentence of inclusion + one sentence of exclusion. 3B models drown in long descriptions.
+- **Lead with the use case, not the function name.** "Retrieves a saved note" beats "Looks up data."
+- **Describe scope, don't prescribe behavior.** Use *factual* descriptions of what the tool does and doesn't cover ("the note store is a key-value cache populated only by save_note; it contains nothing else") rather than imperative commands aimed at the model ("do NOT use for general knowledge"). Small models pattern-match imperatives broadly — multiple "do NOT generate creative content" phrases across tool descriptions can hijack the model's response behavior even outside tool-calling contexts. SharpBot literally produced silent empty responses for "Hi there." after a first attempt at exclusion-wording added "do NOT" three times in the system prompt.
+- **Keep them short.** One or two sentences. 3B models drown in long descriptions, and every token of tool catalog adds prefill cost on every cold start (measured at ~10s/sec of catalog text on Brazos-class CPU).
 - **Put the tool name into the prose.** Small models lean on it as a keyword for retrieval.
 - **Don't rely on a single example to teach format.** If you must include examples, generate them from live tool definitions so they can't drift.
 

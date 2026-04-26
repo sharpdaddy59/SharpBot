@@ -63,9 +63,8 @@ public sealed class ReadFileTool : IBuiltInTool
 
     public string Name => "read_file";
     public string Description =>
-        "Read the contents of an existing text file inside the workspace directory. " +
-        "Use ONLY when the user explicitly asks to read, open, or show a specific named file — " +
-        "do NOT use to generate, write, or create new content (that's the model's own job, not a tool). " +
+        "Read the contents of an existing text file from the workspace directory and return its bytes. " +
+        "The workspace contains files already on disk; this tool reads them and nothing else. " +
         "Paths are relative to the workspace root. Reads up to ~100 KB; larger files are truncated.";
 
     public string ParametersJsonSchema => """
