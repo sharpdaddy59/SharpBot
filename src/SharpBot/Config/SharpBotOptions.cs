@@ -9,6 +9,19 @@ public sealed class SharpBotOptions
     public TelegramOptions Telegram { get; set; } = new();
     public McpOptions Mcp { get; set; } = new();
     public BuiltInToolsOptions BuiltInTools { get; set; } = new();
+    public ToolHostOptions ToolHost { get; set; } = new();
+}
+
+public sealed class ToolHostOptions
+{
+    /// <summary>
+    /// Maximum bytes of any single tool result returned to the model. Larger results
+    /// are truncated head+tail with a marker noting the omission. Acts as a safety net
+    /// against MCP tools (or future built-ins) that don't enforce their own caps —
+    /// without it, a single oversized result becomes part of the conversation prefix
+    /// and is paid on every subsequent turn's prefill. Set to 0 or negative to disable.
+    /// </summary>
+    public int MaxResultBytes { get; set; } = 8000;
 }
 
 public sealed class BuiltInToolsOptions

@@ -53,6 +53,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<BuiltInToolHost>(),
                 sp.GetRequiredService<McpToolHost>(),
             },
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SharpBotOptions>>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CompositeToolHost>>()));
 
         services.AddSingleton<ConfigWriter>();
