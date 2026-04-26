@@ -12,6 +12,10 @@ Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
     .CreateBootstrapLogger();
 
+// Must run before any LLamaSharp activity. On Linux single-file deploys the
+// native libs are extracted without their SONAME symlinks, so we create them.
+NativeLibraryFixup.EnsureLinuxSonames();
+
 try
 {
     var configuration = new ConfigurationBuilder()
