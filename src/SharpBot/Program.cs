@@ -43,8 +43,15 @@ try
     // Info/Debug are dropped unless SharpBot:Llm:VerboseNativeLogs=true — keeps startup readable.
     var verboseNativeLogs = configuration.GetValue<bool>("SharpBot:Llm:VerboseNativeLogs");
     // Specific Warnings that fire on every inference but are purely informational — we know we're
-    // running with a smaller context than the model was trained at, that's intentional.
-    var benignWarningSubstrings = new[] { "n_ctx_seq", "n_ctx_per_seq" };
+    // running with a smaller context than the model was trained at, that's intentional. The
+    // "No library was loaded" message fires dozens of times per session from LLamaSharp's own
+    // safety instrumentation; benign in our case since the library IS loaded by the time we use it.
+    var benignWarningSubstrings = new[]
+    {
+        "n_ctx_seq",
+        "n_ctx_per_seq",
+        "No library was loaded before calling native apis",
+    };
     NativeLibraryConfig.All.WithLogCallback((level, message) =>
     {
         var text = message?.TrimEnd('\n', '\r', ' ');
