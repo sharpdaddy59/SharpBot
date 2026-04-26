@@ -21,8 +21,10 @@ public sealed partial class FetchUrlTool : IBuiltInTool
 
     public string Name => "fetch_url";
     public string Description =>
-        "GET an http/https URL and return the response body as text. HTML is stripped to visible text. " +
-        "Truncated if the response is very large. Use this to look up information on public web pages or APIs.";
+        "GET a specific http/https URL the user has provided and return the response body as text. " +
+        "Use ONLY when the user gives you (or has clearly named) a URL to fetch — " +
+        "do NOT use to search the web, look up arbitrary information, or generate creative content. " +
+        "Do NOT invent or guess URLs. HTML is stripped to visible text; large responses are truncated.";
 
     public string ParametersJsonSchema => """
         {

@@ -53,8 +53,10 @@ public sealed class RecallNoteTool : IBuiltInTool
 
     public string Name => "recall_note";
     public string Description =>
-        "Retrieve a previously saved note by key. Use this when the user asks about something you " +
-        "might have saved earlier. If the key is unknown, call list_notes first to see what's stored.";
+        "Retrieve a note the user previously asked you to save with save_note. " +
+        "Use ONLY when the user explicitly references something they told you to remember earlier — " +
+        "do NOT use for general knowledge questions, fun facts, or anything you can answer from your own training. " +
+        "If the user asks about saved notes but you don't know the key, call list_notes first.";
 
     public string ParametersJsonSchema => """
         {
