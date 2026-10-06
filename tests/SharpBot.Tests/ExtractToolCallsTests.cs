@@ -13,6 +13,23 @@ public class ExtractToolCallsTests
     }
 
     [Fact]
+    public void Parses_tool_call_whose_closing_tag_never_arrived()
+    {
+        // Seen in the Tool Tutor experiment: the model emits the JSON then stops (EOS) before </tool_call>.
+        const string raw = """
+            <tool_call>
+            {"name": "core.weather", "arguments": {"location": "Denver"}}
+            """;
+
+        var (text, calls) = LlamaSharpClient.ExtractToolCalls(raw);
+
+        Assert.Equal("", text);
+        var call = Assert.Single(calls);
+        Assert.Equal("core.weather", call.Name);
+        Assert.Contains("Denver", call.ArgumentsJson);
+    }
+
+    [Fact]
     public void Parses_single_tool_call()
     {
         const string raw = """

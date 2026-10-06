@@ -571,6 +571,13 @@ public sealed partial class LlamaSharpClient : ILlmClient
             requireShape: false, stripOnFailure: true, failureCount: out var nativeFailures);
         malformedToolCalls += nativeFailures;
 
+        // Fallback: an opening <tool_call> tag whose closing tag never arrived (the model hit
+        // EOS or a stop string right after the JSON). Shape-checked; stripped so the user never
+        // sees raw JSON. Found by the Tool Tutor experiment: 2/121 few-shot replies ended "}}".
+        cleaned = ExtractWith(cleaned, UnclosedToolCallRegex(), calls,
+            requireShape: true, stripOnFailure: true, failureCount: out var unclosedFailures);
+        malformedToolCalls += unclosedFailures;
+
         // Fallback: ```json { ... } ``` fenced blocks whose JSON happens to carry the expected
         // tool-call shape (name + arguments). Shape-checked so we don't strip random JSON
         // examples the model might include in its response. Not stripped on failure.
@@ -664,6 +671,8 @@ public sealed partial class LlamaSharpClient : ILlmClient
         return sb.ToString();
     }
 
+    [GeneratedRegex(@"<tool_call>\s*(\{[\s\S]*\})\s*$", RegexOptions.Singleline)]
+    private static partial Regex UnclosedToolCallRegex();
     [GeneratedRegex(@"<tool_call>\s*(\{.*?\})\s*</tool_call>", RegexOptions.Singleline)]
     private static partial Regex ToolCallRegex();
 
