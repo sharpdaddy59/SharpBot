@@ -46,6 +46,12 @@ public sealed class LlmOptions
     public int GpuLayerCount { get; set; }
     public string SystemPrompt { get; set; } = "";
 
+    /// <summary>Optional path to a GGUF LoRA adapter applied to every conversation context. Null or empty = base model.</summary>
+    public string? LoraAdapterPath { get; set; }
+
+    /// <summary>Scale applied to the LoRA adapter (1.0 = as trained).</summary>
+    public float LoraScale { get; set; } = 1.0f;
+
     /// <summary>
     /// When true, routes llama.cpp's Info/Debug native logs through Serilog (very chatty).
     /// When false (default), only Warn/Error native logs surface — keeps startup output clean.

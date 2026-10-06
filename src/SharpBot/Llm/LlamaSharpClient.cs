@@ -37,6 +37,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
 
     private ModelParams? _modelParams;
     private LLamaWeights? _weights;
+    private LLama.Native.LoraAdapter? _lora;
 
     public LlamaSharpClient(IOptions<SharpBotOptions> options, ILogger<LlamaSharpClient> logger)
     {
@@ -68,6 +69,13 @@ public sealed partial class LlamaSharpClient : ILlmClient
             };
 
             _weights = await LLamaWeights.LoadFromFileAsync(_modelParams, cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(_options.LoraAdapterPath))
+            {
+                if (!File.Exists(_options.LoraAdapterPath))
+                    throw new FileNotFoundException($"LoRA adapter not found: {_options.LoraAdapterPath}", _options.LoraAdapterPath);
+                _lora = _weights.NativeHandle.LoadLoraFromFile(_options.LoraAdapterPath);
+                _logger.LogInformation("LoRA adapter loaded: {Path} (scale {Scale})", _options.LoraAdapterPath, _options.LoraScale);
+            }
             _logger.LogInformation("Model ready. Per-conversation KV cache reuse enabled (max {N} active).",
                 Math.Max(1, _options.MaxActiveConversations));
         }
@@ -152,7 +160,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
                         "Conversation {Id}: KV-cache miss — {Reason}",
                         conversationId, DescribeCacheMiss(state.ProcessedText, fullPrompt));
                 }
-                state.Reset(_weights!, _modelParams!);
+                state.Reset(_weights!, _modelParams!, _lora, _options.LoraScale);
                 delta = fullPrompt;
             }
 
@@ -221,7 +229,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
         EvictIfNeeded();
 
         var state = new ConversationState { LastUsed = DateTimeOffset.UtcNow };
-        state.Reset(_weights!, _modelParams!);
+        state.Reset(_weights!, _modelParams!, _lora, _options.LoraScale);
         _states[conversationId] = state;
         _logger.LogInformation("Conversation {Id}: created new KV cache ({Active} active).",
             conversationId, _states.Count);
@@ -265,7 +273,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
             }
             // The warmup dirtied the KV cache with "hi"; reset so the real first inference
             // gets a clean prefill and our ProcessedText tracking starts from zero.
-            state.Reset(_weights!, _modelParams!);
+            state.Reset(_weights!, _modelParams!, _lora, _options.LoraScale);
             _logger.LogDebug("Conversation {Id}: warmed up executor.", conversationId);
         }
         catch (Exception ex)
@@ -436,7 +444,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
         return result;
     }
 
-    private static string BuildToolsSystemSection(IReadOnlyList<ToolDescriptor> tools)
+    internal static string BuildToolsSystemSection(IReadOnlyList<ToolDescriptor> tools)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# Tools");
@@ -683,10 +691,11 @@ public sealed partial class LlamaSharpClient : ILlmClient
         public string ProcessedText = string.Empty;
         public DateTimeOffset LastUsed;
 
-        public void Reset(LLamaWeights weights, ModelParams modelParams)
+        public void Reset(LLamaWeights weights, ModelParams modelParams, LLama.Native.LoraAdapter? lora = null, float loraScale = 1.0f)
         {
             Context?.Dispose();
             Context = weights.CreateContext(modelParams);
+            if (lora is not null) Context.NativeHandle.AddLoraAdapter(lora, loraScale);
             Executor = new InteractiveExecutor(Context);
             ProcessedText = string.Empty;
         }
