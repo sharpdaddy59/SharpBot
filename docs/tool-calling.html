@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tool calling in SharpBot</title>
+  <style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fdfdfd;
+    --fg: #1a1a1a;
+    --muted: #666;
+    --link: #0a66c2;
+    --code-bg: #f4f4f4;
+    --code-fg: #1a1a1a;
+    --border: #e1e1e1;
+    --table-stripe: #fafafa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a1a;
+      --fg: #e6e6e6;
+      --muted: #999;
+      --link: #6cb1ff;
+      --code-bg: #2a2a2a;
+      --code-fg: #e6e6e6;
+      --border: #333;
+      --table-stripe: #232323;
+    }
+  }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: var(--fg);
+    background: var(--bg);
+  }
+  main {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 5rem;
+  }
+  h1, h2, h3, h4 { line-height: 1.25; margin-top: 2em; margin-bottom: 0.5em; }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4em; margin-top: 0; }
+  h2 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.2rem; }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p, li { font-size: 1rem; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  blockquote {
+    margin: 1em 0;
+    padding: 0.4em 1em;
+    border-left: 4px solid var(--border);
+    color: var(--muted);
+  }
+  code {
+    font-family: "Cascadia Code", "Fira Code", Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1em;
+    border-radius: 6px;
+    overflow-x: auto;
+    line-height: 1.45;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.88em;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+    font-size: 0.95em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5em 0.8em;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--code-bg);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--table-stripe); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.25em 0; }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+</style>
+</head>
+<body>
+  <main>
+<h1>Tool calling in SharpBot</h1>
+<p>This is the &quot;why we did it this way&quot; doc for SharpBot&#39;s tool-calling layer. If you&#39;ve ever wondered why a config knob is set to a particular value, why we don&#39;t use GBNF grammars, or why tool descriptions are written the way they are — this is your reference.</p>
+<p>It&#39;s written for someone who can read C# but isn&#39;t necessarily steeped in LLM tool-calling. The TL;DR for experienced readers is at the bottom.</p>
+<hr>
+<h2>What &quot;tool calling&quot; actually is</h2>
+<p>When you type &quot;What time is it?&quot; into SharpBot&#39;s chat REPL, the model doesn&#39;t know what time it is. It can guess, but it&#39;ll be wrong. The fix: give the model a way to <em>ask the host</em> to run a function and feed the answer back.</p>
+<p>Mechanically, this is a four-step dance:</p>
+<ol>
+<li><strong>The host injects tool definitions</strong> into the system prompt. (&quot;You have these tools available: <code>core.current_time</code>, <code>core.weather</code>, ...&quot;)</li>
+<li><strong>The model emits a special-formatted block</strong> in its response when it wants to call one. (<code>&lt;tool_call&gt;{&quot;name&quot;:&quot;core.current_time&quot;,&quot;arguments&quot;:{}}&lt;/tool_call&gt;</code>)</li>
+<li><strong>The host parses that block, runs the C# code</strong>, and appends the result to the conversation as a <code>tool</code> role message.</li>
+<li><strong>The model is invoked again</strong> with the tool result in context, and now produces a normal text reply.</li>
+</ol>
+<p>That&#39;s it. There&#39;s no magic transport between the model and the host — the model just emits text in a known format, and the host scans for it. This is why <strong>format choice is everything</strong>: pick a format the model knows, or be prepared to fight it.</p>
+<p>The reason this is hard for small models (3B-class like Qwen 2.5 3B) is that they&#39;re inconsistent at format-following. A 70B model will reliably emit valid JSON. A 3B model will sometimes drop a quote, hallucinate a trailing word, or pick the wrong tool. SharpBot&#39;s design is built around making a 3B model behave reliably on cheap hardware.</p>
+<hr>
+<h2>Principles</h2>
+<p>These are SharpBot&#39;s load-bearing decisions. Each one was either learned the hard way, or deliberately chosen to avoid a known failure mode.</p>
+<h3>1. Use the model&#39;s native tool-call format. Don&#39;t invent your own.</h3>
+<p>Qwen 2.5 was <em>trained</em> on <code>&lt;tool_call&gt;{&quot;name&quot;:&quot;...&quot;,&quot;arguments&quot;:{...}}&lt;/tool_call&gt;</code>. SharpBot uses that format. Gemma uses <code>```json {...} ```</code> fenced blocks; SharpBot also parses those as a fallback. Llama 3.2 uses something else again, less consistently — supported best-effort.</p>
+<p>The trap to avoid: building a custom tool-call protocol (<code>&lt;|tool_call|&gt;call:name{key:val}&lt;tool_call|&gt;</code> or similar) and trying to teach the model via in-context examples. A 3B model can&#39;t reliably learn a non-native format from a handful of examples. It will look right most of the time and fail in subtle ways the rest. We saw this exact failure in a parallel project — the model emitted <em>almost</em> the right format and the post-processing pipeline never matched.</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Llm/LlamaSharpClient.cs">src/SharpBot/Llm/LlamaSharpClient.cs</a> — the <code>ExtractToolCalls</code> static method handles both formats.</p>
+<h3>2. Use the model&#39;s native chat template. Don&#39;t hand-roll one.</h3>
+<p>Every GGUF file embeds the chat template the model was trained on. Qwen uses <code>&lt;|im_start|&gt;user...&lt;|im_end|&gt;</code>. Gemma uses <code>&lt;start_of_turn&gt;user...&lt;end_of_turn&gt;</code>. Llama uses <code>&lt;|start_header_id|&gt;user&lt;|end_header_id|&gt;...&lt;|eot_id|&gt;</code>. The exact whitespace, the placement of the system prompt, the EOT token — all of it differs subtly per model and matters.</p>
+<p>LlamaSharp ships a <code>LLamaTemplate</code> type that reads the template from the GGUF metadata. Use it:</p>
+<pre><code class="language-csharp">var template = new LLamaTemplate(weights, strict: true) { AddAssistant = true };
+foreach (var msg in messages) template.Add(msg.Role, msg.Content);
+var prompt = LLamaTemplate.Encoding.GetString(template.Apply().ToArray());
+</code></pre>
+<p>This is one of those choices that costs nothing and saves a class of &quot;the model seems confused&quot; bugs. No <code>PromptFormat</code> config flag, no per-model branching, no risk of the format drifting from the model&#39;s training.</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Llm/LlamaSharpClient.cs">src/SharpBot/Llm/LlamaSharpClient.cs</a> around lines 96–101.</p>
+<h3>3. Zero out FrequencyPenalty and PresencePenalty.</h3>
+<p>This is the single subtlest, highest-impact tuning fact in the whole codebase, and it&#39;s only obvious in hindsight.</p>
+<p><code>FrequencyPenalty</code> and <code>PresencePenalty</code> are sampling parameters that down-weight tokens that have already appeared in the output. They exist to make creative text less repetitive. <strong>They also down-weight the <code>&quot;</code> character.</strong> And <code>:</code>. And <code>{</code>. And every other character that appears repeatedly in JSON.</p>
+<p>If you leave these at non-zero defaults, the model will start a tool call like <code>{&quot;name&quot;: &quot;core.curr</code> and then <em>the next quote character is suppressed</em>. The model picks a different token, you get malformed JSON, the parser fails, the bot apologizes, and the user is confused. The failure is silent and looks like &quot;the model is stupid.&quot; The model isn&#39;t stupid — your sampler is eating its tool calls.</p>
+<p>SharpBot defaults: <code>FrequencyPenalty = 0</code>, <code>PresencePenalty = 0</code>. If you want creative-writing-style output, bump them in a non-tool-using context only.</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Config/SharpBotOptions.cs">src/SharpBot/Config/SharpBotOptions.cs</a> lines 67–78. Commit <code>5a2da9b</code> is the fix.</p>
+<h3>4. Keep RepeatPenalty at 1.1.</h3>
+<p><code>RepeatPenalty</code> is different from the two above — it operates over a sliding window of recent tokens and penalizes whole-token repetition. At 1.1 it&#39;s gentle enough not to break structured output but strong enough to prevent the model from getting stuck in a loop. Below 1.0 the model will sometimes spiral on the same token. Above 1.2 it starts breaking JSON.</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Config/SharpBotOptions.cs">src/SharpBot/Config/SharpBotOptions.cs</a> line 65.</p>
+<h3>5. Per-conversation KV cache reuse.</h3>
+<p>When the model processes a prompt, it builds an internal KV (key-value) cache representing the attention state for every token. Building this cache from scratch is expensive — on Brazos-class hardware it&#39;s seconds for a long prompt. <strong>Reusing the cache across turns</strong> is the difference between 5-second and 200-millisecond time-to-first-token.</p>
+<p>The trick is that the cache is only reusable if the prompt prefix is <em>byte-identical</em> between turns. SharpBot keeps a <code>Dictionary&lt;string, ConversationState&gt;</code> keyed by conversation ID, each entry holding its own <code>LLamaContext</code> + <code>InteractiveExecutor</code>. Each turn, we render the new full prompt, compare it against what the executor already processed, and prefill only the delta.</p>
+<p>The implications for everything else:</p>
+<ul>
+<li><strong>Conversation history is append-only.</strong> Editing past turns invalidates the cache.</li>
+<li><strong>The system prompt and tool catalog are baked in once per session.</strong> Re-injecting &quot;current state&quot; at the top breaks everything.</li>
+<li><strong>Tool results are appended as new turns</strong>, not patched into the system prompt.</li>
+</ul>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Llm/LlamaSharpClient.cs">src/SharpBot/Llm/LlamaSharpClient.cs</a> lines 113–141 (cache hit/miss logic), <code>ConversationState</code> partial class.</p>
+<h3>6. Regex extraction post-hoc, not GBNF grammar constraints.</h3>
+<p>GBNF (the grammar format llama.cpp accepts) lets you constrain sampling so the model can <em>only</em> emit tokens that match a grammar. In theory this guarantees well-formed tool calls. In practice it:</p>
+<ul>
+<li>Couples the grammar file to the prompt example (drift causes silent failures)</li>
+<li>Locks you into one tool-call format (no fallback for Gemma/Llama)</li>
+<li>Doesn&#39;t compose with MCP tool schemas without runtime grammar generation</li>
+<li>Is fragile to the trigger-pattern matching the actual model output exactly</li>
+</ul>
+<p>SharpBot does the simpler thing: let the model generate freely (with zeroed penalties — see #3), then run a regex over the completed text to extract any <code>&lt;tool_call&gt;</code> or <code>```json ```</code> blocks. If the model emitted something malformed, we surface a useful error rather than silently retrying.</p>
+<p>This works because principles #1, #2, and #3 keep the output well-formed in the first place. Grammar is a sledgehammer for a problem that doesn&#39;t exist when the foundation is right.</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Llm/LlamaSharpClient.cs">src/SharpBot/Llm/LlamaSharpClient.cs</a> <code>ExtractToolCalls</code> regex.</p>
+<h3>7. Brief warmup on the first turn.</h3>
+<p>Some models (Gemma is the notorious one, but it&#39;s not unique) produce empty output on their first 1–2 inferences against a fresh executor. The model needs to &quot;wake up&quot; by processing a couple of throwaway tokens.</p>
+<p>SharpBot does two <code>MaxTokens=1</code> warmup inferences when a conversation&#39;s executor is created, then resets the cache so the user&#39;s actual first turn gets a clean prefill. Adds ~200 ms once per conversation; saves a confusing silent-first-turn failure that&#39;s almost impossible to diagnose otherwise.</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Llm/LlamaSharpClient.cs">src/SharpBot/Llm/LlamaSharpClient.cs</a> <code>WarmupExecutor</code> method (around line 211). Toggleable via <code>WarmupOnFirstTurn</code> — leave it on.</p>
+<h3>8. Tool arguments are JSON, parsed via JsonElement.</h3>
+<p>Tools take <code>JsonElement arguments</code>, not a custom string format. Three reasons:</p>
+<ul>
+<li>The models we target were trained on JSON tool args. Stay aligned with the training.</li>
+<li><code>System.Text.Json</code> is more forgiving and standard than any bespoke parser.</li>
+<li>MCP is JSON-native; using JSON internally means zero conversion at the MCP boundary.</li>
+</ul>
+<p>The model emits <code>{&quot;q&quot;:&quot;weather in Dallas&quot;}</code>, we parse it into a <code>JsonElement</code>, the tool reads <code>arguments.GetProperty(&quot;q&quot;).GetString()</code>. Done.</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Tools/BuiltIn/IBuiltInTool.cs">src/SharpBot/Tools/BuiltIn/IBuiltInTool.cs</a> and <a href="../src/SharpBot/Tools/BuiltIn/BuiltInToolHost.cs">src/SharpBot/Tools/BuiltIn/BuiltInToolHost.cs</a>.</p>
+<h3>9. Narrow deterministic intent router. Not a catch-all.</h3>
+<p>For utterances we can recognize unambiguously with a regex (&quot;what time is it&quot;), we skip the LLM entirely and dispatch directly to a tool. This is the deterministic intent router.</p>
+<p>The temptation is to keep adding patterns (&quot;what&#39;s the weather&quot;, &quot;search for X&quot;, &quot;remind me to...&quot;). Resist it. The router should fast-path utterances where:</p>
+<ul>
+<li>The regex is narrow enough that false positives are nearly impossible</li>
+<li>The mapped tool is the only sensible answer</li>
+</ul>
+<p>Anything else falls through to the LLM, which is where ambiguous, conversational, or compound queries belong. A router that tries to be a catch-all is a hand-rolled NLU system, and it will fail unpredictably.</p>
+<p>SharpBot&#39;s router currently fast-paths only time/date queries. That&#39;s by design.</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Agent/RegexIntentRouter.cs">src/SharpBot/Agent/RegexIntentRouter.cs</a>. Wired into <a href="../src/SharpBot/Agent/AgentLoop.cs">AgentLoop.cs:67–87</a>.</p>
+<h3>10. Identical-call-twice loop detection.</h3>
+<p>If the model emits the <em>exact same tool call</em> two iterations in a row, it&#39;s not absorbing the tool result. Almost always this means the model isn&#39;t reading <code>role=tool</code> messages correctly — usually a chat-template mismatch (Gemma is a frequent offender). Keep iterating and it&#39;ll spin forever, fans roaring.</p>
+<p>SharpBot detects this and aborts with a useful error pointing at the likely cause (&quot;try Qwen 2.5 3B instead&quot;).</p>
+<p><strong>Where this lives:</strong> <a href="../src/SharpBot/Agent/AgentLoop.cs">src/SharpBot/Agent/AgentLoop.cs</a> lines ~89–107.</p>
+<hr>
+<h2>The pipeline, traced</h2>
+<p>Here&#39;s the journey of a single user turn through SharpBot&#39;s tool layer. Useful when something goes wrong and you need to know where to set a breakpoint.</p>
+<ol>
+<li><strong>A message arrives</strong> via <code>IChatTransport.IncomingMessagesAsync</code> (Telegram, REPL, or eventually voice). <a href="../src/SharpBot/Transport/IChatTransport.cs">Transport/IChatTransport.cs</a></li>
+<li><strong><code>AgentLoop.HandleAsync</code></strong> picks it up. The user message is appended to the conversation. <a href="../src/SharpBot/Agent/AgentLoop.cs">Agent/AgentLoop.cs</a></li>
+<li><strong>Intent router runs first.</strong> If it matches, the mapped tool dispatches directly via <code>IToolHost.ExecuteAsync</code>, the result becomes the assistant&#39;s reply, we&#39;re done. <a href="../src/SharpBot/Agent/RegexIntentRouter.cs">Agent/RegexIntentRouter.cs</a></li>
+<li><strong>Otherwise: the LLM is invoked</strong> via <code>ILlmClient.StreamInferAsync</code>. <a href="../src/SharpBot/Llm/ILlmClient.cs">Llm/ILlmClient.cs</a></li>
+<li><strong>Inside <code>LlamaSharpClient.StreamInferAsync</code>:</strong> the conversation is rendered through <code>LLamaTemplate</code>, the system prompt has the tool catalog injected (Qwen XML format), the KV cache is checked for delta-prefill opportunity, the model generates. <a href="../src/SharpBot/Llm/LlamaSharpClient.cs">Llm/LlamaSharpClient.cs</a></li>
+<li><strong><code>StreamingTextEmitter</code></strong> buffers tokens, holding back anything that might be the start of a tool-call marker. Only safe prose surfaces as <code>LlmStreamEvent.TextDelta</code>. <a href="../src/SharpBot/Llm/StreamingTextEmitter.cs">Llm/StreamingTextEmitter.cs</a></li>
+<li><strong>At end-of-generation, <code>ExtractToolCalls</code></strong> scans the complete output for <code>&lt;tool_call&gt;</code> and <code>```json ```</code> blocks. The terminal <code>LlmStreamEvent.Final</code> event carries the parsed <code>LlmResponse</code>.</li>
+<li><strong>Back in <code>AgentLoop</code>:</strong> if the response has tool calls, dispatch each via <code>IToolHost.ExecuteAsync</code> (which routes built-in vs MCP), append the result as a <code>role=tool</code> message, and loop back to step 4. Cap at 8 iterations.</li>
+<li><strong>When the model produces a tool-call-free response,</strong> send it via <code>IChatTransport.SendAsync</code> and we&#39;re done.</li>
+</ol>
+<hr>
+<h2>Writing tool descriptions for small models</h2>
+<p>This came out of reviewing a parallel project that hit a <code>lookup_fact</code> vs <code>search_web</code> confusion, then learning the lesson again the hard way when an over-corrected first pass on SharpBot&#39;s own descriptions made the model go silent on plain greetings.</p>
+<ul>
+<li><strong>Lead with the use case, not the function name.</strong> &quot;Retrieves a saved note&quot; beats &quot;Looks up data.&quot;</li>
+<li><strong>Describe scope, don&#39;t prescribe behavior.</strong> Use <em>factual</em> descriptions of what the tool does and doesn&#39;t cover (&quot;the note store is a key-value cache populated only by save_note; it contains nothing else&quot;) rather than imperative commands aimed at the model (&quot;do NOT use for general knowledge&quot;). Small models pattern-match imperatives broadly — multiple &quot;do NOT generate creative content&quot; phrases across tool descriptions can hijack the model&#39;s response behavior even outside tool-calling contexts. SharpBot literally produced silent empty responses for &quot;Hi there.&quot; after a first attempt at exclusion-wording added &quot;do NOT&quot; three times in the system prompt.</li>
+<li><strong>Keep them short.</strong> One or two sentences. 3B models drown in long descriptions, and every token of tool catalog adds prefill cost on every cold start (measured at ~10s/sec of catalog text on Brazos-class CPU).</li>
+<li><strong>Put the tool name into the prose.</strong> Small models lean on it as a keyword for retrieval.</li>
+<li><strong>Don&#39;t rely on a single example to teach format.</strong> If you must include examples, generate them from live tool definitions so they can&#39;t drift.</li>
+</ul>
+<hr>
+<h2>What we deliberately don&#39;t do</h2>
+<ul>
+<li><strong>Microsoft Agent Framework (yet).</strong> The <code>AIAgent</code> / <code>ChatClientAgent</code> abstraction is appealing but would mean rewriting the working tool-extraction in <a href="../src/SharpBot/Llm/LlamaSharpClient.cs">LlamaSharpClient</a> against <code>AIFunction</code> semantics, re-validating KV-cache discipline against <code>ChatClientAgent</code>&#39;s prompt assembly, and re-expressing the MCP bridge. The cost is real; the benefit (provider portability) is mostly already provided by <code>ILlmClient</code>. Defer until there&#39;s a concrete need.</li>
+<li><strong>GBNF grammars.</strong> See principle #6.</li>
+<li><strong>Custom tool-call protocols.</strong> See principle #1.</li>
+<li><strong>Manual chat-template strings.</strong> See principle #2.</li>
+<li><strong>A catch-all intent router.</strong> See principle #9.</li>
+</ul>
+<hr>
+<h2>TL;DR</h2>
+<p>For experienced readers — SharpBot&#39;s tool-calling sticks to four rules:</p>
+<ol>
+<li>Use the model&#39;s native chat template via <code>LLamaTemplate</code>.</li>
+<li>Use the model&#39;s native tool-call format. Parse with regex post-hoc.</li>
+<li>Zero <code>FrequencyPenalty</code> and <code>PresencePenalty</code>. Keep <code>RepeatPenalty = 1.1</code>.</li>
+<li>Maintain per-conversation KV cache discipline (append-only history, byte-identical prefix).</li>
+</ol>
+<p>Everything else is in service of those four. Most &quot;tool calling is unreliable on small models&quot; complaints are a violation of one of them.</p>
+
+  </main>
+</body>
+</html>
