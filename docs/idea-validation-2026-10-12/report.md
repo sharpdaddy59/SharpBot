@@ -146,3 +146,7 @@ This takes one week and less than $100. All thresholds below are set by the judg
 ---
 
 *Method: three research agents (competitors, demand, distribution/economics) gathered web evidence; five isolated adversarial personas wrote memos against the evidence pack; a judge synthesized the verdict. The demand research was thin (about 8 searches, few direct forum quotes), which the judge accounted for.*
+
+## Follow-up
+
+- [How SharpBot adds value to an existing Home Assistant install](ha-integration.md): integration options (brain box, HAOS add-on, HACS shim), what HA would use a local model for, and why the pitch only stands if it beats stock Ollama.
