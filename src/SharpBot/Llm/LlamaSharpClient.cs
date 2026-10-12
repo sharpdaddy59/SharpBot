@@ -704,7 +704,7 @@ public sealed partial class LlamaSharpClient : ILlmClient
         {
             Context?.Dispose();
             Context = weights.CreateContext(modelParams);
-            if (lora is not null) Context.NativeHandle.AddLoraAdapter(lora, loraScale);
+            if (lora is not null) Context.NativeHandle.SetLoraAdapters(new[] { (lora, loraScale) });
             Executor = new InteractiveExecutor(Context);
             ProcessedText = string.Empty;
         }
